@@ -20,21 +20,50 @@
 There is **no pH**. There is **no MAP** among the generated features (MAP is evaluation-only;
 see Figure 6).
 
-### The reference graph — use this same 16-node graph in Figures 1, 2, and 3
+### The reference graph — use this exact graph in Figures 1, 2, and 3
 
-Four clusters of four, each cluster containing a triangle, joined by three bridges. The
-triangles are the point: they are why a strong pair stays at distance 2 even when its own
-edge is held out.
+**16 nodes, 19 edges, maximum degree 3.** Four clusters of four. Each cluster is a
+**triangle plus one pendant node**, and the clusters are chained by three bridges.
+
+**The triangles are the entire point.** They are why a strongly-dependent pair stays at
+distance 2 — and therefore stays *representable* — even when its own edge is held out. A
+4-cycle has the same number of edges but no common neighbor, and it would destroy the
+argument. Do not draw squares. Do not draw a ring. Do not draw a lattice.
+
+Complete edge list — draw exactly these 19 edges and no others:
 
 ```
-circulation   : heart rate — SBP — DBP  (triangle),  DBP — respiratory rate
-respiration   : SpO2 — temperature — WBC (triangle),  WBC — glucose
-electrolytes  : sodium — potassium — chloride (triangle),  chloride — bicarbonate
-renal/heme    : creatinine — BUN — hemoglobin (triangle),  hemoglobin — platelets
-bridges       : respiratory rate — SpO2,  glucose — sodium,  bicarbonate — creatinine
+CLUSTER 1  "circulation"        triangle: heart rate — SBP
+                                          SBP        — DBP
+                                          DBP        — heart rate
+                                pendant:  DBP        — respiratory rate
+
+CLUSTER 2  "respiration"        triangle: SpO2        — temperature
+                                          temperature — WBC
+                                          WBC         — SpO2
+                                pendant:  WBC         — glucose
+
+CLUSTER 3  "electrolytes"       triangle: sodium    — potassium
+                                          potassium — chloride
+                                          chloride  — sodium
+                                pendant:  chloride  — bicarbonate
+
+CLUSTER 4  "renal / hematology" triangle: creatinine — BUN
+                                          BUN        — hemoglobin
+                                          hemoglobin — creatinine
+                                pendant:  hemoglobin — platelets
+
+BRIDGES (these connect the clusters — the graph must be CONNECTED)
+           respiratory rate — SpO2          (cluster 1 → 2)
+           glucose          — sodium        (cluster 2 → 3)
+           bicarbonate      — creatinine    (cluster 3 → 4)
 ```
 
-Maximum degree 3. Do not add edges. Do not draw it as a ring or as a lattice.
+Label the nodes with the **clinical names above**, not with numbers. If numbers are needed
+for the qubit wires in Figure 1, put them as a small secondary label (`q_1` … `q_16`).
+
+Checklist before you export: 16 distinct nodes · 19 edges · 4 visible triangles · 3 bridges ·
+the graph is connected end to end · no node label appears twice · no node has degree > 3.
 
 ---
 
@@ -254,25 +283,37 @@ data-preparation stage and it is worth its own figure.
 
 Paste each of these together with the shared style directive.
 
-## Fix for Figure 1 — pipeline
+## Fix for Figure 1 — pipeline (round 3)
 
-> Keep the existing five-stage layout, the colors, and the dotted guidelines between the CDG
-> and the RZZ links. Change only these two things.
+Round 2 fixed the local heads (`h_1` … `h_16`) and the critic loop — keep both. **The CDG in
+Stage 2 is still wrong.** Three defects:
+
+1. **Every cluster is drawn as a 4-cycle (a square). There are no triangles anywhere.** The
+   triangles are the mechanism the whole paper rests on.
+2. **The three bridges are missing.** The four clusters float unconnected; the graph must be
+   connected end to end.
+3. **Node `15` appears twice and `16` is missing.**
+
+> Keep the five-stage layout, the colors, the `h_1(q_1,c)` … `h_16(q_16,c)` heads, the critic
+> loop, and the dotted guidelines between the CDG and the RZZ links. Redraw **only the graph in
+> Stage 2**, and re-derive the RZZ links in Stage 3 from it.
 >
-> **(a)** The CDG in Stage 2 currently has 15 nodes and the label `13` appears twice. Redraw
-> it as the reference graph, with exactly 16 nodes, using clinical names rather than numbers:
-> four clusters of four, each containing a triangle, joined by three bridges —
-> `heart rate — SBP — DBP` (triangle) and `DBP — respiratory rate`;
-> `SpO2 — temperature — WBC` (triangle) and `WBC — glucose`;
-> `sodium — potassium — chloride` (triangle) and `chloride — bicarbonate`;
-> `creatinine — BUN — hemoglobin` (triangle) and `hemoglobin — platelets`;
-> bridges `respiratory rate — SpO2`, `glucose — sodium`, `bicarbonate — creatinine`.
-> Cluster captions: `circulation`, `respiration`, `electrolytes`, `renal / hematology`.
-> Maximum degree 3. The RZZ links in Stage 3 must connect exactly these 19 pairs.
+> Draw the reference graph exactly as specified in "The reference graph" above: 16 nodes, 19
+> edges, four clusters, **each cluster is a triangle with one extra node hanging off it** — not
+> a square — and the four clusters are chained together by three bridges so the whole graph is
+> connected.
 >
-> **(b)** In Stage 4, the 16 local heads are all labeled `h_u(q_u, c)` with the same subscript.
-> Label them individually instead: `h_1(q_1, c)`, `h_2(q_2, c)`, … , `h_16(q_16, c)`. The point
-> is that each feature has its *own* head.
+> Label the graph nodes with the clinical names (`heart rate`, `SBP`, `DBP`, `respiratory
+> rate`, `SpO2`, `temperature`, `WBC`, `glucose`, `sodium`, `potassium`, `chloride`,
+> `bicarbonate`, `creatinine`, `BUN`, `hemoglobin`, `platelets`), each name appearing exactly
+> once, with a small `q_1` … `q_16` tag underneath so the reader can follow a name to its qubit
+> wire.
+>
+> The vertical RZZ links in Stage 3 must connect exactly the 19 pairs listed in the edge list —
+> including the three bridge links, which will span between distant wires.
+>
+> Before exporting, check: 4 visible triangles · 3 bridges · connected graph · 16 distinct names
+> · no name repeated · no node with more than 3 edges.
 
 ## Fix for Figure 3 — aligned vs permuted (redraw)
 
