@@ -60,8 +60,63 @@ def teacher_graph(rng) -> nx.Graph:
     return G
 
 
+def teacher_data_cond(G: nx.Graph, n: int, rng, beta: float = 0.7):
+    """Teacher in which c ACTUALLY DRIVES x — the realistic case. Returns (X, C, Omega).
+
+    Why this exists
+    ---------------
+    `teacher_data` below draws C independently of X. That is not what MIMIC looks like:
+    mortality, age, sex and ICU type plainly shift vitals and labs. Worse, it creates an
+    artificial task — the generator is handed c in every angle and every head and has to learn
+    *not to use it* — and it makes the true conditional and unconditional partial correlations
+    identical, so an estimator mismatch that is real in the MIMIC pipeline is invisible in the
+    benchmark.
+
+    Here:
+        g | c  ~  N( B c ,  Omega^-1 )        c shifts the MEAN
+        x      =  monotone_j( g_j )           per-feature monotone map -> non-normal marginals
+
+    So the **conditional** dependency structure given c is exactly Omega — the graph — while
+    the **unconditional** partial correlation is contaminated by c. That is precisely the
+    situation the CDG is defined for, and it is why the metric must be `eval_dep.partial_corr_c`
+    and not the unconditional one.
+    """
+    p = N_FEAT
+    Om = np.eye(p)
+    for u, v in G.edges():
+        Om[u, v] = Om[v, u] = rng.uniform(0.35, 0.55) * rng.choice([-1, 1])
+    Om += np.eye(p) * (abs(np.linalg.eigvalsh(Om).min()) + 0.15)
+
+    Sigma = np.linalg.inv(Om)
+    d = np.sqrt(np.diag(Sigma))
+    Sigma = Sigma / np.outer(d, d)
+
+    y = (rng.random(n) < 0.1).astype(float)
+    age = rng.normal(0, 1, n)
+    sex = (rng.random(n) < 0.5).astype(float)
+    icu = rng.integers(0, 3, n).astype(float)
+    C = np.column_stack([y, age, sex, icu])
+
+    # c shifts the mean of every feature, by a different amount per feature.
+    B = rng.normal(0, beta, size=(C.shape[1], p))
+    g = (C - C.mean(0)) / (C.std(0) + 1e-8) @ B
+    g = g + rng.multivariate_normal(np.zeros(p), Sigma, size=n)
+
+    X = np.column_stack([
+        np.sign(g[:, j]) * np.abs(g[:, j]) ** (1.0 + 0.5 * (j % 3)) if j % 3
+        else np.exp(0.5 * g[:, j]) for j in range(p)
+    ])
+    X = (X - X.mean(0)) / (X.std(0) + 1e-8)
+    return X, C, Om
+
+
 def teacher_data(G: nx.Graph, n: int, rng) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Generate nonparanormal data from the true graph. Returns: (X, C, Omega)."""
+    """Generate nonparanormal data from the true graph. Returns: (X, C, Omega).
+
+    NOTE: C is drawn **independently of X** here, which is not realistic — see
+    `teacher_data_cond` above. Kept so that the results already recorded against it
+    (RESULTS_ceiling_joint.md, RESULTS_lr.md) remain reproducible.
+    """
     p = N_FEAT
     Om = np.eye(p) * 1.0
     for u, v in G.edges():

@@ -70,6 +70,41 @@ cancels out any "advantage from being nearby." Even so, aligned leads by 4.1× �
 advantage comes not from graph combinatorics but from the fact that the edges the CDG
 selected carry the real dependency structure.** This is the central claim of the paper.
 
+## Is This Circular? No — and Here Is Why
+
+The obvious objection:
+
+> "You minimized the partial-correlation error directly, and the aligned circuit has its RZZ
+> gates on the true edges. Of course it wins. This is circular."
+
+It is not, and the reason is structural rather than empirical.
+
+**Every variant receives the identical objective and the identical budget.** permuted also puts
+19 RZZ gates on its own edges, also minimizes the same target with the same optimizer, the same
+learning rate, the same number of restarts. Nothing is withheld from it. The only difference is
+*which clinical pair sits under which gate.*
+
+And the gap between them is not an accident of optimization — it is **forced by Corollary 1**.
+If `d_G(u,v) > 2L` then `Cov(x_u, x_v | c) = 0` *exactly*, at every parameter setting. So for a
+permuted graph, the strong pairs that got scattered beyond the light cone are not merely hard to
+fit; they are **unreachable in principle**. The ceiling is a theorem about the model class, and
+the optimization is only how we measure where that ceiling lies. `RESULTS_ceiling.md` shows the
+same cliff independently: outside the cone the best achievable `|ρ|` is 0.012, which is sampling
+noise.
+
+That leaves one loophole, and `distmatched` closes it. One might argue that the CDG's advantage
+is merely that *its* strong pairs happen to be nearby — a fact about graph combinatorics that
+any graph with the right distance profile would inherit. So we constructed a permutation that
+matches the CDG's held-out pair distance distribution: being nearby is no longer an advantage
+the CDG uniquely holds. It still wins by 4.1×.
+
+What survives is exactly the claim we set out to test: **the specific edges the CDG selected
+carry real dependency structure, and that is worth bits.**
+
+The honest caveat is the reverse of the objection: this is an experiment about *representability*,
+not about *what a practical generator will actually learn*. That question is answered below, and
+the answer is currently negative.
+
 ## And Yet — WGAN-GP Fails to Find This Solution At All
 
 Training the same circuit with the primary model of v2 §8.10 (pure WGAN-GP):
