@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
-# 환자 데이터는 절대 커밋하지 않는다 (PhysioNet DUA).
-# MIMIC-IV / eICU 원본과 그로부터 파생된 환자 수준 데이터는 전부
-# D:\pythondata\Medical Data 아카이브에만 존재해야 한다. DATA.md 참조.
-# 아래는 실수로라도 들어오는 것을 막는 방어선이다.
+# Never commit patient data (PhysioNet DUA).
+# MIMIC-IV / eICU raw data, and anything patient-level derived from it, must live
+# ONLY in the archive at D:\pythondata\Medical Data. See DATA.md.
+# The patterns below are a backstop against it ever being staged by accident.
 # ---------------------------------------------------------------------------
 data/
 *.csv
@@ -18,18 +18,18 @@ data/
 *.dta
 *.sas7bdat
 
-# 3rd-party (직접 클론해서 쓴다 — DATA.md 참조)
+# Third-party (clone it yourself — see DATA.md)
 tools/
 
-# 논문 PDF (저작권)
+# Papers (copyright)
 refs/
 
-# 실행 산출물
+# Run artifacts
 results/
 *.log
 *_out.txt
 
-# 환경 스냅샷 (로컬 복구용)
+# Environment snapshots (local restore only)
 .backup/
 
 # Python

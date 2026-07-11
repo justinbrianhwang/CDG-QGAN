@@ -1,227 +1,343 @@
-# v2 계획서 개정 필요 사항
+# Required Revisions to the v2 Research Plan
 
-실험으로 확정된 것만 적는다. 근거 스크립트를 각 항목에 명시한다.
-작성: 2026-07-11 (MIMIC-IV v3.1 도착 전, demo + 회로 실험 기준)
+Only experimentally confirmed items are recorded here. The supporting script is named for each item.
+Written: 2026-07-11 (before MIMIC-IV v3.1 arrived; based on the demo + circuit experiments)
 
 ---
 
-## A. 반드시 바꿔야 하는 것
+## A. Must change
 
-### A-1. **`L=1` 단독.** `L=2`는 확증 실험에 쓸 수 없고 `L=3`은 정의상 null.
+### A-1. **`L=1` only.** `L=2` cannot be used for the confirmatory experiment, and `L=3` is null by definition.
 
-근거: `scripts/precheck_alignment.py` · **실제 MIMIC-IV v3.1, n=48,560**
+Evidence: `scripts/precheck_alignment.py` · **real MIMIC-IV v3.1, n=48,560**
 
-표현 가능한 의존성 질량 `M(G,L) = Σ|ρ_true(u,v)|·1[d_G(u,v) ≤ 2L]`을
-CDG와 isomorphic permutation 귀무분포(5,000회)로 비교했다. permutation은
-isomorphic이므로 노드·간선·차수열·삼각형 수·군집계수가 전부 보존되고,
-달라지는 것은 **어떤 임상 쌍이 그 삼각형 안에 앉는가**뿐이다.
+The representable dependency mass `M(G,L) = Σ|ρ_true(u,v)|·1[d_G(u,v) ≤ 2L]` was compared
+between the CDG and an isomorphic-permutation null distribution (5,000 draws). Because the
+permutations are isomorphic, the node count, edge count, degree sequence, triangle count, and
+clustering coefficient are all preserved; the only thing that changes is **which clinical pair
+sits inside which triangle**.
 
-| L | 도달 가능 쌍 | CDG 질량 | permutation 귀무 | 백분위 | 판정 |
-|---|---|---|---|---|---|
-| **1** | 49/120 | **5.55 (90.5%)** | 2.50 ± 0.68 (max 4.67) | **100.0%** | **z=+4.46, p<0.0001 PASS** |
-| 2 | 113/120 | 6.09 (99.2%) | 5.78 ± 0.33 | 92.5% | **z=+0.96, p=0.075 FAIL** |
-| 3 | **120/120** | 6.14 (100%) | 6.14 ± 0.00 | — | **무의미** |
+These are the **post-MAP-removal** numbers (see C-3). An earlier run that still contained MAP
+gave `L=1` z=+4.46; that extra margin was the arithmetic identity `MAP≈(SBP+2DBP)/3`, not
+clinical structure. Authoritative source: `RESULTS_precheck.md`.
 
-**`L=1`에서 CDG는 5,000개 순열 중 단 하나에게도 지지 않았다** (귀무 최댓값 4.67 < CDG 5.55).
-도달 범위 안에 전체 의존성 질량의 **90.5%** 를 담는다 (무작위 순열은 40.7%).
+CDG: 16 nodes · 23 edges · maximum degree 3 · diameter 5 · total dependency mass Σ|ρ| = 6.10
 
-**`L=2`는 실제 데이터에서 FAIL이다.** demo(n=81)에서는 통과했으나 그 그래프는 노이즈였다.
-따라서 `L=1`은 "primary"가 아니라 **유일하게 가능한 설정**이다.
+| L | Reach radius | Reachable pairs | CDG mass | Permutation null | z | p | Verdict |
+|---|---|---|---|---|---|---|---|
+| **1** | 2 | 57/120 | **4.83 (79.2%)** | 2.89 ± 0.61 [1.05, 5.03] | **+3.18** | **0.0004** | **PASS** |
+| 2 | 4 | 115/120 | 6.00 (98.3%) | 5.84 ± 0.23 | +0.66 | 0.287 | **FAIL** |
+| 3 | 6 | **120/120** | 6.10 (100%) | 6.10 ± 0.00 | 0.00 | 1.000 | **meaningless** |
 
-> v2 §8.11 표: `논리적 CDG block 깊이 L∈{1,2}, L=3 exploratory`
-> → **`L=1` 단독. `L=2`는 확증용이 아니라 아래의 음성 대조로만 쓴다. `L=3` 삭제.**
+**At `L=1`, only 2 of the 5,000 permutations beat the CDG** (p = 0.0004). Within its reachable
+range the CDG captures **79.2%** of the total dependency mass; a random permutation captures 47.4%.
 
-#### 이것은 제약이 아니라 결과다 — 깊이에 따른 효과 감쇠가 이론의 예측이다
+**`L=2` FAILS on the real data.** It passed on the demo (n=81), but that graph was noise.
+`L=1` is therefore not the "primary" setting — it is **the only viable setting**.
 
-정렬 효과가 깊이에 따라 `z = +4.46 → +0.96 → 0.00` 으로 소멸한다.
-이는 **light-cone 이론이 예측한 그대로**다: 깊이가 늘면 도달 반경 `2L`이 넓어져
-모든 쌍이 표현 가능해지고, 토폴로지가 아무 제약도 걸지 않게 된다.
+> v2 §8.11 table: `logical CDG block depth L∈{1,2}, L=3 exploratory`
+> → **`L=1` only. `L=2` is not for confirmation; it is used solely as the negative control
+> described below. Delete `L=3`.**
 
-**이 감쇠 곡선을 논문의 그림으로 제시한다.** 이론이 예측하고 데이터가 확인한
-관계이며, "왜 얕은 회로여야 하는가"에 대한 답이다. `L=2`는 실패가 아니라
-**이론을 확인해주는 음성 대조군**이다.
+#### This is not a limitation but a result — the decay of the effect with depth is what the theory predicts
 
-#### 왜 실제 데이터에서 효과가 이렇게 강한가
+The alignment effect vanishes with depth: `z = +3.18 → +0.66 → 0.00`.
+This is **exactly what the light-cone theory predicts**: as depth grows, the reach radius `2L`
+widens, every pair becomes representable, and the topology stops imposing any constraint at all.
 
-임상 변수가 실제로 클러스터를 이루고, 그 클러스터가 **삼각형**을 만들기 때문이다.
-그래서 강한 간선을 held-out으로 빼도 공통 이웃을 통해 **거리 2**에 남는다:
+**We present this decay curve as a figure in the paper.** It is a relationship the theory
+predicted and the data confirmed, and it is the answer to "why must the circuit be shallow?"
+`L=2` is not a failure — it is **the negative control that confirms the theory**.
 
-| held-out 강한 쌍 | \|ρ\| | 거리 | 공통 이웃 |
-|---|---|---|---|
-| dbp — map | 0.752 | 2 | sbp |
-| creatinine — bun | 0.657 | 2 | potassium (둘 다 신장) |
-| sodium — chloride | 0.649 | 2 | bicarbonate (둘 다 전해질·산염기) |
+#### Why the effect is strong on the real data
 
-무작위 순열은 이 셋을 거리 3~5로 흩어놓고, 따름정리 1에 의해 **표현이 원천 불가능**해진다.
+Because clinical variables genuinely form clusters, and those clusters form **triangles**.
+So even when a strong edge is held out, the pair often remains at **distance 2** via a common
+neighbor, and stays representable. A random permutation scatters such pairs to distance 3–5,
+and by Corollary 1 they become **fundamentally unrepresentable**.
 
-### A-2. Primary endpoint를 held-out 간선에서 **120쌍 전체**로 교체
+The dominant source of mass loss at `L=1` is `sbp–dbp` (|ρ| = 0.439), which is held out and sits
+at distance 3 — out of reach. Sensitivity to the hold-out construction seed still needs checking.
 
-근거: `scripts/build_cdg.py`, `scripts/graphs.py`
+### A-2. Replace the primary endpoint: held-out edges → **all 120 pairs**
 
-held-out 간선만으로 재면 **CDG가 무작위 permutation보다 못하다**:
+Evidence: `scripts/build_cdg.py`, `scripts/graphs.py`
 
-| 그래프 | L=1 held-out 도달 | L=2 |
+Measured on held-out edges alone, **the CDG does worse than a random permutation**:
+
+| Graph | L=1 held-out reachable | L=2 |
 |---|---|---|
 | CDG | **3/13** | 12/13 |
 | permuted_0 | **8/13** | 12/13 |
 | ring | 6/13 | 13/13 |
 
-CDG는 "강한 간선을 RZZ에 놓도록" 구성되는데, held-out 평가는 "held-out 쌍이
-가까운가"를 묻는다. 이 둘을 잇는 장치가 구성 어디에도 없다.
+The CDG is constructed so as to *place strong edges on RZZ gates*, whereas held-out evaluation
+asks whether *held-out pairs are close*. Nothing in the construction connects these two things.
 
-반면 **120쌍 전체**로 재면 CDG가 귀무분포 99.8 백분위로 압승한다. 전체 쌍 평가는
-두 가지 오류를 모두 잡는다:
-- **위음성**: 실제 강한 의존을 못 만듦 (permuted가 강한 쌍을 멀리 배치)
-- **위양성**: 없는 의존을 만들어냄 (permuted가 무관한 쌍을 RZZ로 연결)
+By contrast, measured over **all 120 pairs**, the CDG wins decisively at the 99.8th percentile
+of the null distribution. Evaluating all pairs catches both kinds of error:
+- **False negatives**: failing to produce a truly strong dependency (the permuted graph places
+  a strong pair far away)
+- **False positives**: manufacturing a dependency that does not exist (the permuted graph
+  connects an unrelated pair by an RZZ)
 
-held-out 간선 오차는 **비순환성 보조 지표**로 강등한다.
+The held-out edge error is demoted to a **secondary non-circularity metric**.
 
-> v2 §12.1 "유일한 확증적 primary endpoint = HDE"
-> → **primary = 120쌍 전체 조건부 의존성 오차. HDE는 secondary.**
+> v2 §12.1 "the only confirmatory primary endpoint = HDE"
+> → **primary = conditional dependency error over all 120 pairs. HDE is secondary.**
 
-### A-3. 조건 벡터를 `c = (사망, 연령, 성별, ICU유형)`으로 확장
+### A-3. Expand the condition vector to `c = (mortality, age, sex, ICU type)`
 
-v2 §7.2는 CDG를 (y, age, sex, ICU)에 residualize하는데, generator는 `y`만 조건으로
-받는다. 따라서 `ρ_real`(4개 공변량 조건부)과 `ρ_syn`(y만 조건부)이 **서로 다른
-추정량**이 되어, 그 차이를 primary endpoint로 삼고 있다.
+v2 §7.2 residualizes the CDG on (y, age, sex, ICU), but the generator is conditioned on `y`
+alone. As a result `ρ_real` (conditional on 4 covariates) and `ρ_syn` (conditional on `y` only)
+are **different estimators**, and their difference is being used as the primary endpoint.
 
-local encoding이 이미 `y`를 받으므로 스칼라를 4차원 벡터로 바꾸면 끝이고,
-따름정리 1은 "conditional on **c**"로 그대로 성립한다.
-구현: `scripts/features.py: CONDITION_VARS`, `scripts/model.py: cond_dim=4`
+The local encoding already takes `y`, so it suffices to turn that scalar into a 4-dimensional
+vector, and Corollary 1 continues to hold verbatim as "conditional on **c**".
+Implementation: `scripts/features.py: CONDITION_VARS`, `scripts/model.py: cond_dim=4`
 
-### A-4. 의존성 지표는 **nonparanormal 공간**에서 계산
+### A-4. Compute the dependency metric in the **nonparanormal space**
 
-v2 §12.1은 "부분상관"이라고만 하고 공간을 지정하지 않는다. 원 단위 Pearson으로
-재면, 폭-8 local head가 못 맞추는 heavy-tail 주변분포 오차(크레아티닌, 젖산,
-글루코스)가 의존성 지표를 오염시킨다. 게다가 permuted는 특징별 **차수**가 달라
-표현력이 달라지므로 주변분포 fidelity도 달라진다 → Δ가 "정렬 효과"가 아니라
-"누가 주변분포를 더 잘 맞췄나"를 재게 된다.
+v2 §12.1 says only "partial correlation" and does not specify the space. Measured with Pearson
+correlation in raw units, the heavy-tailed marginal errors that the width-8 local head cannot
+fit (creatinine, lactate, glucose) contaminate the dependency metric. Worse, the permuted graphs
+have different per-feature **degrees**, hence different expressivity, hence different marginal
+fidelity → Δ ends up measuring "who fit the marginals better" rather than "the alignment effect".
 
-CDG 추정과 **동일한** rank-inverse-normal 변환을 real/synthetic 양쪽에 적용해야
-단조 head에 불변인 copula만 남는다. 구현: `scripts/train.py: _npn()`
+Applying the **same** rank-inverse-normal transform used for CDG estimation to both the real and
+the synthetic data leaves only the copula, which is invariant to the monotone head.
+Implementation: `scripts/train.py: _npn()`
 
-> 부록 A 사전등록 체크리스트에 **`의존성 지표 계산 공간(nonparanormal) 고정`** 추가.
+> Add **`fix the space in which the dependency metric is computed (nonparanormal)`** to the
+> pre-registration checklist in Appendix A.
 
 ---
 
-## B. 추가해야 하는 것
+## B. Must add
 
-### B-1. Distance-matched permutation 대조군
+### B-1. Distance-matched permutation control
 
-따름정리에 의해 `d > 2L`이면 공분산이 0이므로, held-out 쌍이 CDG에서 가깝고
-permuted에서 멀면 `Δ < 0`은 그래프 조합론으로 이미 결정된다 = 정보량 없는 검정.
+By the corollary, covariance is 0 whenever `d > 2L`. So if a held-out pair is close in the CDG
+and far in the permuted graph, `Δ < 0` is already determined by graph combinatorics = a test
+that carries no information.
 
-held-out 쌍의 **거리 분포를 CDG와 동일하게 맞춘** permutation을 대조군으로 넣으면,
-"가까이 있다"는 이점이 상쇄되고 남는 차이는 오직 **CDG가 고른 그 간선들이 실제
-임상 구조를 담고 있는가**뿐이다. 구현: `scripts/graphs.py: distance_matched_permuted()`
+Adding as a control a permutation whose **held-out-pair distance distribution is matched to the
+CDG's** cancels out the "being close" advantage, and the only difference that remains is whether
+**the specific edges the CDG chose actually capture clinical structure**.
+Implementation: `scripts/graphs.py: distance_matched_permuted()`
 
-### B-2. 사전 검사(precheck)를 프로토콜에 넣기
+### B-2. Put the precheck into the protocol
 
-`M(G,L)` vs permutation 귀무분포 검정은 **훈련을 한 번도 하지 않고** 확증 실험이
-성공할 가능성이 있는지 판정한다. 여기서 지면 GPU를 아무리 태워도 `Δ < 0`은 안 나온다.
-본 실험 전에 반드시 통과시킬 관문으로 프로토콜에 명시한다.
+The `M(G,L)` vs. permutation-null test determines **without any training at all** whether the
+confirmatory experiment has any chance of succeeding. If you lose here, no amount of GPU burn
+will produce `Δ < 0`. Write it into the protocol as a gate that must be passed before the main
+experiment.
 
-### B-3. "고전 파라미터는 의존성을 만들 수 없다" 명제를 §4에 추가
+### B-3. Add the proposition "classical parameters cannot create dependencies" to §4
 
-`h_u`는 `(q_u, c)`만 받는 1차원 맵이므로, `c` 조건부로
-`x̃_u ⟂ x̃_v ⟺ q_u ⟂ q_v`. 즉 **출력의 모든 조건부 교차특징 의존 구조는
-양자 코어에서만 발생한다.**
+`h_u` is a one-dimensional map taking only `(q_u, c)`, so conditional on `c`,
+`x̃_u ⟂ x̃_v ⟺ q_u ⟂ q_v`. That is, **every conditional cross-feature dependency structure in
+the output arises solely in the quantum core.**
 
-`r_Q`(양자 파라미터 비율 = 3.5%)를 보고하면 "고전이 다 한 것"처럼 보이지만,
-**의존성을 만들 수 있는 파라미터 중 양자 비율은 100%**다. 이게 진짜 진술이다.
-코드로 강제·검증됨: `scripts/model.py: assert_no_cross_feature_mixing()`
-(head Jacobian `∂x̃_u/∂q_v`가 정확히 대각행렬, off-diagonal = 0.0)
+Reporting `r_Q` (the quantum parameter fraction = 3.5%) makes it look as though "the classical
+part did all the work", but **among the parameters that *can* create dependencies, the quantum
+fraction is 100%**. That is the true statement.
+Enforced and verified in code: `scripts/model.py: assert_no_cross_feature_mixing()`
+(the head Jacobian `∂x̃_u/∂q_v` is exactly diagonal, off-diagonal = 0.0)
 
-### B-4. Light-cone 부분회로 시뮬레이터 (§14, §24.5)
+### B-4. Light-cone subcircuit simulator (§14, §24.5)
 
-명제 1에 의해 `⟨Z_u⟩`는 `N_L(u)`에만 의존하므로, 2^16 전체 상태벡터가 필요 없다.
+By Proposition 1, `⟨Z_u⟩` depends only on `N_L(u)`, so the full 2^16 statevector is unnecessary.
 
-| n | L | 전체 | light-cone | 절감 |
+| n | L | full | light-cone | saving |
 |---|---|---|---|---|
 | 16 | 1 | 65,536 | **16** | **4,096x** |
 | 12 | 2 | 4,096 | 1,024 | 4x |
 
-전체 시뮬레이터와 `1e-6`까지 일치(float32 정밀도). 전체 상태벡터는 finite-shot
-비트스트링 샘플링에서만 필요하다. 이론이 계산을 싸게 만든 사례이므로 기여로 보고한다.
-구현: `scripts/qsim_lightcone.py`
+Agrees with the full simulator to `1e-6` (float32 precision). The full statevector is needed only
+for finite-shot bitstring sampling. This is a case of theory making computation cheap, so we
+report it as a contribution.
+Implementation: `scripts/qsim_lightcone.py`
 
 ---
 
-## C. 구현상 함정 (계획서에는 없지만 코드에 반영됨)
+## C. Implementation pitfalls (not in the plan, but reflected in the code)
 
-### C-1. `nx.maximum_spanning_tree`는 차수를 제약하지 않는다
+### C-1. `nx.maximum_spanning_tree` does not constrain degree
 
-그냥 쓰면 maxdeg=5짜리 그래프가 나와 v2 §7.6의 `Δ≤3`을 어긴다. 그러면 지름이
-작아져(6→4) 그래프 거리가 변별력을 잃는다. **차수 제약 하의 Kruskal**을 직접
-구현해야 한다. 구현: `scripts/build_cdg.py: build_graph()`
+Used as-is it yields a graph with maxdeg=5, violating the `Δ≤3` requirement of v2 §7.6. That in
+turn shrinks the diameter (6→4) and graph distance loses its discriminating power. You must
+implement **Kruskal under a degree constraint** yourself.
+Implementation: `scripts/build_cdg.py: build_graph()`
 
-### C-2. E_fit을 먼저 만들면 held-out이 전부 약한 관계가 된다
+### C-2. Building E_fit first leaves only weak relations in the held-out set
 
-`E_fit = MST ∪ top-r`을 먼저 뽑으면 강한 간선(dbp–map 0.76, creatinine–bun 0.76,
-sodium–chloride 0.67)을 전부 흡수해서 held-out에 `|ρ| ≤ 0.16`짜리만 남는다
-→ HDE가 추정 노이즈만 재게 된다. **held-out을 강도 층화로 먼저 뽑되, 남은 그래프의
-연결성이 유지되는 것만** 고르고, 그다음 나머지로 E_fit을 구성한다.
+If you select `E_fit = MST ∪ top-r` first, it absorbs all the strong edges (dbp–map 0.76,
+creatinine–bun 0.76, sodium–chloride 0.67) and only pairs with `|ρ| ≤ 0.16` are left for the
+held-out set → the HDE then measures nothing but estimation noise. **Select the held-out set
+first, stratified by strength, choosing only pairs whose removal keeps the remaining graph
+connected**, and only then build E_fit from what is left.
 
-### C-3. **[해결] MAP을 생성 변수에서 제외한다. 산술 항등식이며, 가짜 간선을 만든다.**
+### C-3. **[RESOLVED] Exclude MAP from the generated variables. It is an arithmetic identity, and it manufactures spurious edges.**
 
-근거: `scripts/diag_collinearity.py` · 실제 MIMIC-IV v3.1, n=51,587
+Evidence: `scripts/diag_collinearity.py` · real MIMIC-IV v3.1, n=51,587
 
-**문제는 "지표 지배"가 아니라 과학적 오류였다.**
+**The problem was not "metric dominance" — it was a scientific error.**
 
-**(1) MAP은 임상 의존관계가 아니라 산술 항등식이다.**
+**(1) MAP is an arithmetic identity, not a clinical dependency.**
 
-| 항등식 | R² | Pearson r | 비고 |
+| Identity | R² | Pearson r | Note |
 |---|---|---|---|
-| `MAP ≈ (SBP + 2·DBP)/3` | **0.860** | **0.962** | 평균절대오차 3.36 mmHg (MAP SD 11.0) |
-| `Hct ≈ 3 × Hb` | — | **0.962** | Hct/Hb 중앙값 = **3.02** |
+| `MAP ≈ (SBP + 2·DBP)/3` | **0.860** | **0.962** | mean absolute error 3.36 mmHg (MAP SD 11.0) |
+| `Hct ≈ 3 × Hb` | — | **0.962** | median Hct/Hb = **3.02** |
 
-**(2) 더 심각 — MAP이 SBP–DBP에 가짜 음의 상관을 유도한다.**
+**(2) Worse — MAP induces a spurious negative correlation between SBP and DBP.**
 
 ```
-MAP 포함:  ρ(sbp, dbp) = -0.508    <- 생리학적으로 틀림
-MAP 제외:  ρ(sbp, dbp) = +0.499    <- 진짜 관계
+MAP included:  ρ(sbp, dbp) = -0.508    <- physiologically wrong
+MAP excluded:  ρ(sbp, dbp) = +0.499    <- the true relation
 ```
 
-**부호가 뒤집힌다.** MAP이 SBP·DBP의 결정론적 함수이므로, 정밀도 행렬에서 MAP을
-조건부로 고정하면 "MAP이 같은데 SBP가 높다 → DBP가 낮아야 한다"는 인위적 음의
-관계가 유도된다 (collider/suppression 아티팩트). 즉 **CDG에 생리학적으로 잘못된
-간선이 들어간다.** 지표 문제가 아니라 과학적 오류다.
+**The sign flips.** Because MAP is a deterministic function of SBP and DBP, conditioning on MAP
+in the precision matrix induces the artificial negative relation "MAP is the same but SBP is
+high → DBP must be low" (a collider/suppression artifact). In other words, **a physiologically
+wrong edge enters the CDG.** This is not a metric problem; it is a scientific error.
 
-**(3) 논문 신뢰성 위험.** `dbp–map`(Σ|z|의 10.4%)과 `sbp–map`(7.2%)이 상위 3쌍 중
-2개를 차지한다. CDG의 우위가 "산술 항등식을 복원했다"로 환원되어 보인다.
-> 리뷰어: "당신의 효과는 `MAP=(SBP+2DBP)/3`라는 대수적 항등식을 복원한 것 아닌가?
-> 그건 임상 의존구조 발견이 아니라 산수다."
+**(3) Risk to the paper's credibility.** `dbp–map` (10.4% of Σ|z|) and `sbp–map` (7.2%) occupy
+two of the top three pairs. The CDG's advantage then looks reducible to "it recovered an
+arithmetic identity".
+> Reviewer: "Isn't your effect just the recovery of the algebraic identity
+> `MAP=(SBP+2DBP)/3`? That is arithmetic, not the discovery of clinical dependency structure."
 
-#### 조치
+#### Actions
 
-- **MAP을 생성 변수에서 제외.** 여전히 추출하되(`EVAL_ONLY`) **임상 개연성 평가에만** 사용:
-  생성된 `SBP~`, `DBP~` 로부터 `MAP~ = (SBP~ + 2·DBP~)/3` 을 계산해 실제 MAP 분포와
-  비교한다. **MAP을 직접 생성해 맞추는 것보다 엄격한 검증이다.**
-  (v2 §6.4·§12.7도 이미 MAP을 학습 손실이 아니라 진단 지표로 규정하고 있다.)
-- **빈 자리에 WBC 투입.** 중환자 데이터인데 **염증 축이 통째로 빠져 있었다.**
-- **대체 변수 목록에서 hematocrit 제거.** `Hct ≈ 3×Hb`로 같은 항등식이다.
-  관측률 미달 시 자동 투입되면 같은 함정을 다시 밟는다.
-  → 대체 순서: calcium, magnesium, phosphate.
-- 항등식 하나를 잃고 **진짜 생리 관계(SBP–DBP, ρ=+0.499)를 얻었다.**
+- **Exclude MAP from the generated variables.** Still extract it (`EVAL_ONLY`) and use it **for
+  clinical-plausibility evaluation only**: from the generated `SBP~` and `DBP~`, compute
+  `MAP~ = (SBP~ + 2·DBP~)/3` and compare it against the real MAP distribution. **This is a
+  stricter check than generating MAP directly and fitting it.**
+  (v2 §6.4 and §12.7 already define MAP as a diagnostic metric rather than a training loss.)
+- **Put WBC in the vacated slot.** This is ICU data, and **the entire inflammation axis was
+  missing.**
+- **Remove hematocrit from the substitute-variable list.** `Hct ≈ 3×Hb` is the same identity.
+  If it is auto-substituted when an observation-rate threshold is missed, we walk into the same
+  trap again.
+  → Substitution order: calcium, magnesium, phosphate.
+- We lost one identity and **gained a real physiological relation (SBP–DBP, ρ=+0.499).**
 
-**재검증 필요**: 특징 집합이 바뀌었으므로 CDG와 precheck를 다시 돌려
-`L=1` 정렬 효과가 유지되는지 확인해야 한다 (MAP 제거 전: z=+4.46).
+**Re-validation required**: the feature set has changed, so the CDG and the precheck must be
+rerun to confirm that the `L=1` alignment effect holds (before MAP removal: z=+4.46).
 
-### C-4. RZZ 부호 벡터 캐시 키에 큐비트 수를 넣어야 한다
+### C-4. The RZZ sign-vector cache key must include the qubit count
 
-light-cone 부분회로는 cone마다 큐비트 수 `m`이 다르므로, `(u,v)`만으로 캐시 키를
-잡으면 크기가 다른 부호 벡터가 충돌한다. 키는 `(n, u, v)`.
+Light-cone subcircuits have a different qubit count `m` per cone, so keying the cache on `(u,v)`
+alone causes sign vectors of different sizes to collide. The key must be `(n, u, v)`.
 
 ---
 
-## D. 검증 완료 (변경 불필요, 그대로 진행)
+## D. Verified (no change needed, proceed as planned)
 
-- **따름정리 1이 수치로 확인됨.** `L=1` 천장: `d=1: 0.991`, `d=2: 0.847`, `d≥3: ~0.01`.
-  정확히 `2L` 경계에서 절벽. (`scripts/ceiling.py`)
-- **게이트 통과.** 인접 쌍 천장이 0.99이므로 강한 임상 관계(Hb–Hct 0.95,
-  SBP–MAP 0.90)를 회로가 표현할 수 있다. 표현력 부족으로 설계가 무너지지 않는다.
-- **부록 B 회로 규약.** `RZZ` 직후 `Z` 측정 → 얽힘 gradient `-1.5e-17`(0).
-  비가환 `RX/RY` mixing을 넣으면 `+0.46`. v2 §4.5의 설계 근거가 실증됨.
-  (`scripts/smoke_test_env.py`)
-- **참고문헌 [13], [14] 실재 확인.** arXiv:2505.22533, arXiv:2602.12704 모두 조회됨.
-  QTabGAN은 2026-02-13, Kumari·Achutha·Sivaraman — 서지사항 일치.
+- **Corollary 1 is numerically confirmed.** `L=1` ceiling: `d=1: 0.991`, `d=2: 0.847`,
+  `d≥3: ~0.01`. A cliff exactly at the `2L` boundary. (`scripts/ceiling.py`)
+- **Gate check passed.** Since the adjacent-pair ceiling is 0.99, the circuit can represent the
+  strong clinical relations (Hb–Hct 0.95, SBP–MAP 0.90). The design does not collapse from lack
+  of expressivity.
+- **Appendix B circuit convention.** A `Z` measurement immediately after `RZZ` → entangling
+  gradient `-1.5e-17` (i.e. 0). Inserting non-commuting `RX/RY` mixing gives `+0.46`. The design
+  rationale of v2 §4.5 is empirically confirmed. (`scripts/smoke_test_env.py`)
+- **References [13], [14] confirmed to exist.** arXiv:2505.22533 and arXiv:2602.12704 were both
+  retrieved. QTabGAN is dated 2026-02-13, by Kumari, Achutha, and Sivaraman — the bibliographic
+  details match.
+
+---
+
+## E. **[OPEN · TOP PRIORITY]** WGAN-GP fails to train the entangling angles
+
+Evidence: `scripts/benchmark_synthetic.py`, `scripts/diag_benchmark.py`, `scripts/diag_trained.py`
+· controlled synthetic teacher (16 nodes, 19 edges; the true graph is known from the outset)
+
+### E-1. The confirmatory control does not work
+
+On the controlled synthetic benchmark, **all four variants coincide** (dependency error over
+120 pairs, 3 seeds):
+
+| Model | \|E\| | 120-pair error |
+|---|---|---|
+| aligned | 19 | 0.1359 ± 0.0092 |
+| permuted | 19 | 0.1346 ± 0.0089 |
+| distmatched | 19 | 0.1354 ± 0.0106 |
+| rewired | 19 | 0.1360 ± 0.0090 |
+| **no_entangle** | **0** | **0.1318** ← **the best** |
+
+The hypothesis predicts `aligned < permuted`, but in fact permuted is marginally better, and
+**the model with no entanglement at all beats every other model.**
+
+### E-2. The cause is not "it fails to learn" but "it manufactures spurious dependencies"
+
+You cannot interpret 0.135 without computing a baseline. Here is the score of **a model that
+creates no dependencies whatsoever** (the real data shuffled independently column by column →
+the marginals are perfect and the dependencies are exactly zero):
+
+| Baseline | 120 pairs | 19 true edges | 101 non-edges |
+|---|---|---|---|
+| **floor (zero dependency)** | **0.0648** | 0.3676 | 0.0078 |
+| aligned (WGAN-GP trained) | 0.1359 | **0.3662** | **0.0926** |
+| permuted | 0.1346 | 0.3707 | 0.0902 |
+| no_entangle | 0.1318 | 0.3760 | 0.0859 |
+
+**The trained model is 2.1x worse than a model that does nothing.** Two things happen at once:
+
+1. **The error on the 19 true edges equals the floor.** `0.3662` vs `0.3676`. The contribution of
+   the 19 entangling gates is **essentially zero**. The model produces none of the true
+   dependencies.
+2. **Spurious dependency of `0.0926` on the 101 non-edges.** Even a model with **zero**
+   entangling gates produces `0.0859` → the culprit is not entanglement but **the condition
+   vector `c`, which every feature shares.**
+
+In other words, **the WGAN-GP critic fails to supply a useful gradient to `gamma` (the only
+parameter that can create cross-feature dependency).** `gamma` is never learned and only adds
+noise, so turning entanglement off yields a better score. The alignment effect (expected
+magnitude ~0.01) is completely buried in this noise.
+
+**This is not an expressivity problem.** `ceiling.py` showed that at L=1 the adjacent-pair
+ceiling is `|ρ|=0.991`. The problem is that gradient descent does not reach that solution.
+`scripts/ceiling_joint.py` removes the GAN and runs gradient descent **directly** on the
+120-pair pattern, to decide whether this is "representable but the GAN cannot find it" or
+"the full pattern is unrepresentable in the first place".
+
+### E-3. Estimator mismatch — the metric is computed in a different space from the CDG definition
+
+The CDG is defined by partial correlation **conditional on `c`** (§7.2, A-3), but
+`train.dependency_error` measures **unconditional** partial correlation. The generator feeds `c`
+into every qubit angle and every head, so the correlation `c` induces shows up as a false
+positive on **every pair**.
+
+Linearly residualizing on `c` reduces the non-edge error from `0.0926 → 0.0532`, but it does
+**not eliminate it**, because `c` enters the angles **nonlinearly**. Linear residualization is
+not enough.
+
+> **This is not a defect of the synthetic benchmark alone — it is present verbatim in the real
+> MIMIC experiment.**
+> If the metric is not fixed, all 90 runs of WP-2 will be measuring this false positive.
+
+### E-4. Actions (mandatory before starting WP-2)
+
+1. **[GATE]** The verdict from `ceiling_joint.py`. If it comes back "unrepresentable", the
+   circuit design must be reconsidered and WP-2 is pointless.
+2. **Align the metric with the CDG definition.** Replace it with partial correlation conditional
+   on `c`, using an estimator that handles nonlinear conditioning properly (linear
+   residualization removes only half of the false positives).
+3. **Make WGAN-GP actually learn dependencies.** v2 §8.10 forbids a dependency loss in order to
+   avoid a circular argument, and the result is **a model that learns no dependencies at all**.
+   This tension must be resolved. We need a way to make the critic sensitive to pairwise
+   structure without directly optimizing the metric.
+
+> **Running WP-2 (9 variants × 10 seeds = 90 runs) right now would be entirely wasted effort.**
+> E-1 through E-3 come first.
+
+### E-5. A bug caught along the way: `no_entangle` falls back to the full statevector
+
+Because of the `lightcone and len(edges)` guard in `model.py`, a graph with zero edges could not
+take the light-cone path and fell back to the **full 2^16 = 65,536-dimensional statevector**.
+With no edges each cone is a single qubit (2 dimensions), so **what should have been the lightest
+case became the heaviest** — it occupied 22GB of GPU memory and training effectively stalled.
+The guard has been removed (`if lightcone`).

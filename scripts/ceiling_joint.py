@@ -1,30 +1,37 @@
-"""결합 표현력 천장 — 120쌍 패턴 전체를 동시에 맞출 수 있는가.
+"""Joint expressivity ceiling — can the full 120-pair pattern be matched simultaneously?
 
-왜 필요한가
------------
-`ceiling.py`는 **쌍 하나**의 |상관|을 최대화했다 (L=1, d=1 -> 0.991).
-그건 "간선 하나에 강한 의존성을 걸 수 있다"는 뜻일 뿐,
-**19개 간선을 동시에 rho=0.35로 맞추면서 101개 비간선을 0으로 유지**할 수 있다는
-뜻이 아니다. 확증 실험이 요구하는 건 후자다. 그 칸은 비어 있었다.
+Why this is needed
+------------------
+`ceiling.py` maximized the |correlation| of a **single pair** (L=1, d=1 -> 0.991).
+That only means "a strong dependency can be placed on one edge"; it does **not** mean
+that **19 edges can be brought to rho=0.35 simultaneously while holding the 101
+non-edges at 0**. The latter is what the confirmatory experiment requires. That box was
+left empty.
 
-`diag_trained.py`가 보여준 것:
-    WGAN-GP로 학습한 모델의 참 간선 오차 = 0.3662
-    의존성을 아예 안 만드는 모델의 오차   = 0.3676
-    -> 학습된 모델은 참 간선에 의존성을 **거의 0** 만든다.
+What `diag_trained.py` showed:
+    true-edge error of the WGAN-GP-trained model = 0.3662
+    error of a model that creates no dependency at all = 0.3676
+    -> the trained model creates **almost zero** dependency on the true edges.
 
-두 가지 중 하나다:
-    (a) 회로가 그 패턴을 애초에 표현할 수 없다  -> 설계 결함, WP-2 무의미
-    (b) 회로는 표현할 수 있는데 WGAN-GP가 못 찾는다 -> 학습 결함, 목적함수를 고쳐야 한다
+It is one of two things:
+    (a) the circuit cannot represent that pattern in the first place -> design flaw,
+        WP-2 is pointless
+    (b) the circuit can represent it but WGAN-GP fails to find it -> training flaw, the
+        objective must be fixed
 
-여기서 GAN을 빼고 회로 파라미터를 부분상관 오차에 **직접** 경사하강시킨다.
-head는 단조 1차원 맵이므로 nonparanormal 공간의 의존성은 q=<Z>의 copula로만
-결정된다 (ceiling.py와 같은 논리). 따라서 q 위에서 재면 충분하다.
+Here we remove the GAN and gradient-descend the circuit parameters **directly** on the
+partial-correlation error. The head is a monotone 1-D map, so dependency in the
+nonparanormal space is determined solely by the copula of q=<Z> (the same logic as in
+ceiling.py). Measuring on q is therefore sufficient.
 
-읽는 법
--------
-    aligned가 낮고 permuted가 높다  -> (b). 회로/CDG 가설은 살아있고 학습을 고치면 된다.
-    둘 다 높다                       -> (a). 설계가 그 패턴을 못 만든다. 재설계.
-    둘 다 낮다                       -> CDG 정렬이 표현력에 무관하다. 확증 실험 근거가 무너진다.
+How to read this
+----------------
+    aligned low and permuted high -> (b). The circuit/CDG hypothesis survives; fix the
+                                     training.
+    both high                     -> (a). The design cannot produce that pattern.
+                                     Redesign.
+    both low                      -> CDG alignment is irrelevant to expressivity. The
+                                     rationale for the confirmatory experiment collapses.
 """
 
 from __future__ import annotations
@@ -49,10 +56,12 @@ RIDGE = 1e-3
 STEPS = 1500
 BATCH = 4096
 RESTARTS = 3
+N_EVAL = 65536   # held-out draw used to score parameters (see fit())
+EVAL_EVERY = 50
 
 
 def partial_corr_torch(q: torch.Tensor) -> torch.Tensor:
-    """미분 가능한 부분상관 (q: (B, n))."""
+    """Differentiable partial correlation (q: (B, n))."""
     x = q - q.mean(0, keepdim=True)
     x = x / (x.std(0, keepdim=True) + 1e-6)
     S = (x.T @ x) / (x.shape[0] - 1)
@@ -63,7 +72,22 @@ def partial_corr_torch(q: torch.Tensor) -> torch.Tensor:
 
 
 def fit(edges, target: torch.Tensor, C: np.ndarray, seed: int) -> float:
-    """회로 파라미터를 target 부분상관에 직접 맞춘다. 반환: 120쌍 평균 절대오차."""
+    """Fit the circuit parameters directly to the target partial correlation.
+
+    Returns: mean absolute error over the 120 pairs, scored on a **held-out draw**.
+
+    Scoring the training minibatch would be wrong here. Each step draws a fresh z and a
+    fresh row sample, so `min` over the trajectory would return the luckiest minibatch,
+    not the loss of the best parameters. With BATCH=4096 the per-entry sampling noise of
+    a partial correlation is ~1/sqrt(4096) = 0.016, and taking a min over 1500 steps and
+    then again over RESTARTS compounds the optimistic bias. Since `floor` is computed
+    analytically (noise-free), that bias would not cancel between the two sides of the
+    comparison — it would manufacture a ceiling that is better than the circuit can
+    actually reach.
+
+    So: score periodically on a fixed held-out draw (same z, same rows for every variant
+    and every restart), under no_grad, and return the best held-out score.
+    """
     torch.manual_seed(seed)
     m = CDGQGAN(N_FEAT, list(edges), depth=1, cond_dim=C.shape[1], seed=seed).to(DEVICE)
     core = m.core
@@ -72,7 +96,18 @@ def fit(edges, target: torch.Tensor, C: np.ndarray, seed: int) -> float:
     Ct = torch.tensor(C, dtype=torch.float32, device=DEVICE)
     iu = torch.triu_indices(N_FEAT, N_FEAT, offset=1)
 
-    best = float("inf")
+    # Fixed held-out draw — identical across variants and restarts, so the comparison is
+    # not decided by which model happened to see a friendlier evaluation sample.
+    g = torch.Generator(device=DEVICE).manual_seed(12345)
+    z_eval = 2 * torch.rand(N_EVAL, N_FEAT, device=DEVICE, generator=g) - 1
+    y_eval = Ct[torch.randint(0, len(Ct), (N_EVAL,), device=DEVICE, generator=g), 0]
+
+    @torch.no_grad()
+    def held_out_error() -> float:
+        R = partial_corr_torch(core(z_eval, y_eval))
+        return (R[iu[0], iu[1]] - target[iu[0], iu[1]]).abs().mean().item()
+
+    best = held_out_error()
     for step in range(STEPS):
         idx = torch.randint(0, len(Ct), (BATCH,), device=DEVICE)
         z = 2 * torch.rand(BATCH, N_FEAT, device=DEVICE) - 1
@@ -82,7 +117,8 @@ def fit(edges, target: torch.Tensor, C: np.ndarray, seed: int) -> float:
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
-        best = min(best, loss.item())
+        if (step + 1) % EVAL_EVERY == 0 or step == STEPS - 1:
+            best = min(best, held_out_error())
     return best
 
 
@@ -91,7 +127,7 @@ def main() -> None:
     G = teacher_graph(rng)
     X, C, _ = teacher_data(G, N_TRAIN, rng)
 
-    # teacher의 참 부분상관 (nonparanormal 공간) — 이것이 맞춰야 할 표적
+    # The teacher's true partial correlation (nonparanormal space) — this is the target to match
     Xn = _npn(X)
     S = np.corrcoef(Xn, rowvar=False)
     P = np.linalg.inv(S + RIDGE * np.eye(N_FEAT))
@@ -111,18 +147,28 @@ def main() -> None:
         "no_entangle": nx.empty_graph(N_FEAT),
     }
 
-    # floor: 의존성 0 모델의 120쌍 오차 (같은 표적 기준)
-    iu = np.triu_indices(N_FEAT, 1)
-    floor = float(np.abs(Rstar[iu]).mean())  # R_syn = I 이면 오차 = |R*|
+    # floor: the 120-pair error of a zero-dependency model (against the same target).
+    # Scored with the SAME estimator on the SAME held-out sample size as the variants, so
+    # that the finite-sample noise of the partial-correlation estimate does not sit on only
+    # one side of the comparison. (Scoring it analytically as mean|R*| would give a
+    # noise-free floor and an optimistically-scored ceiling.)
+    iu_t = torch.triu_indices(N_FEAT, N_FEAT, offset=1)
+    gf = torch.Generator(device=DEVICE).manual_seed(999)
+    fl = []
+    for _ in range(5):
+        q_indep = torch.randn(N_EVAL, N_FEAT, device=DEVICE, generator=gf)
+        R = partial_corr_torch(q_indep)
+        fl.append((R[iu_t[0], iu_t[1]] - target[iu_t[0], iu_t[1]]).abs().mean().item())
+    floor = float(np.mean(fl))
 
     print("=" * 78)
-    print("결합 표현력 천장 — 120쌍 패턴 전체 (GAN 없이 직접 최적화)")
+    print("Joint expressivity ceiling — the full 120-pair pattern (direct optimization, no GAN)")
     print("=" * 78)
-    print(f"  teacher: 19간선, 간선 |rho| 평균 {np.abs([Rstar[i,j] for i,j in G.edges()]).mean():.3f}")
-    print(f"  최적화: Adam lr=0.05, {STEPS}스텝, batch={BATCH}, 재시작 {RESTARTS}회")
-    print(f"  [floor] 의존성 0 모델의 120쌍 오차 = {floor:.4f}")
+    print(f"  teacher: 19 edges, mean edge |rho| {np.abs([Rstar[i,j] for i,j in G.edges()]).mean():.3f}")
+    print(f"  optimization: Adam lr=0.05, {STEPS} steps, batch={BATCH}, {RESTARTS} restarts")
+    print(f"  [floor] 120-pair error of a zero-dependency model = {floor:.4f}")
     print()
-    print(f"  {'모델':<14} {'120쌍 최소오차':>16}   {'floor 대비':>12}")
+    print(f"  {'model':<14} {'min 120-pair err':>16}   {'vs. floor':>12}")
     print("  " + "-" * 50)
 
     res = {}
@@ -138,16 +184,16 @@ def main() -> None:
     a = res["aligned"]
     for ref in ("permuted", "distmatched", "rewired", "no_entangle"):
         dlt = a - res[ref]
-        print(f"  aligned - {ref:<12} = {dlt:+.4f}   {'aligned 우세' if dlt < 0 else 'aligned 열세'}")
+        print(f"  aligned - {ref:<12} = {dlt:+.4f}   {'aligned better' if dlt < 0 else 'aligned worse'}")
     print()
     if a >= floor * 0.95:
-        print("  >> 회로가 teacher 패턴을 표현하지 못한다. 설계 결함이다 (경우 a).")
+        print("  >> The circuit cannot represent the teacher pattern. This is a design flaw (case a).")
     elif a < res["permuted"] - 0.005:
-        print("  >> 회로는 표현할 수 있고 aligned가 우세하다 (경우 b).")
-        print("     -> CDG 가설은 살아있다. 문제는 WGAN-GP가 그 해를 못 찾는 것이다.")
+        print("  >> The circuit can represent it and aligned is better (case b).")
+        print("     -> The CDG hypothesis survives. The problem is that WGAN-GP fails to find that solution.")
     else:
-        print("  >> 표현은 되는데 aligned가 permuted를 못 이긴다.")
-        print("     -> 확증 실험의 전제가 무너진다. 이걸 먼저 해결해야 한다.")
+        print("  >> It is representable, but aligned cannot beat permuted.")
+        print("     -> The premise of the confirmatory experiment collapses. This must be resolved first.")
 
 
 if __name__ == "__main__":

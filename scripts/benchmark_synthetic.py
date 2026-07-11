@@ -1,22 +1,26 @@
-"""통제된 합성 그래프 벤치마크 (CDG-QGAN v2 §10).
+"""Controlled synthetic-graph benchmark (CDG-QGAN v2 §10).
 
-실제 임상 데이터에서는 참 그래프를 모른다. 여기서는 참 그래프를 알고 시작한다.
--> 이론과 구현이 맞는지, 확증 설계가 실제로 작동하는지 MIMIC 없이 검증할 수 있다.
+With real clinical data we do not know the true graph. Here we start out knowing it.
+-> We can verify, without MIMIC, that the theory matches the implementation and that
+   the confirmatory design actually works.
 
 Teacher:
-  1. 알려진 sparse precision matrix Omega* (모듈러 그래프 — 임상 클러스터를 모사)
+  1. A known sparse precision matrix Omega* (modular graph — mimics clinical clusters)
   2. Gaussian latent ~ N(0, Omega*^-1)
-  3. 차원별로 다른 비선형 단조 변환 -> 비정규 주변분포 (nonparanormal)
+  3. A different nonlinear monotone transform per dimension -> non-normal marginals
+     (nonparanormal)
 
-비교 (전부 동일 자원: 간선 수, 깊이, 파라미터, critic, loss, step 수):
-  aligned      : 참 그래프를 회로 토폴로지로 사용
-  permuted     : isomorphic 순열 — 임상 정렬만 파괴
-  distmatched  : [리뷰 B] 거리 분포까지 맞춘 순열
-  rewired      : 차수 보존 재배선
-  no_entangle  : RZZ 제거
+Comparison (all with identical resources: edge count, depth, parameters, critic, loss,
+number of steps):
+  aligned      : uses the true graph as the circuit topology
+  permuted     : isomorphic permutation — destroys only the clinical alignment
+  distmatched  : [review B] permutation matched on the distance distribution as well
+  rewired      : degree-preserving rewire
+  no_entangle  : RZZ removed
 
-평가 [리뷰 B-2]:
-  primary = 120쌍 전체 조건부 의존성 오차 (위음성 + 위양성)
+Evaluation [review B-2]:
+  primary = conditional dependency error over all 120 pairs (false negatives + false
+  positives)
 """
 
 from __future__ import annotations
@@ -38,45 +42,46 @@ N_FEAT = 16
 N_TRAIN = 20000
 N_SYN = 20000
 SEEDS = [0, 1, 2]
-DEPTH = 1  # [findings] L=1이 유일한 작동점. L=3은 모든 쌍이 도달 가능해져 무의미.
+DEPTH = 1  # [findings] L=1 is the only operating point. At L=3 every pair becomes reachable, so it is meaningless.
 
 
 def teacher_graph(rng) -> nx.Graph:
-    """모듈러 그래프: 4개 클러스터(4노드씩) + 클러스터 간 다리.
+    """Modular graph: 4 clusters (4 nodes each) + bridges between clusters.
 
-    실제 임상 구조를 모사한다 — 순환/전해질/신장/혈액 같은 국소 클러스터.
+    Mimics real clinical structure — local clusters such as circulatory / electrolyte /
+    renal / hematologic.
     """
     G = nx.Graph()
     G.add_nodes_from(range(N_FEAT))
-    for b in range(4):  # 각 블록 안에서 삼각형을 만든다 (거리 2 경로 확보)
+    for b in range(4):  # build a triangle inside each block (guarantees distance-2 paths)
         o = 4 * b
         G.add_edges_from([(o, o + 1), (o + 1, o + 2), (o, o + 2), (o + 2, o + 3)])
-    G.add_edges_from([(3, 4), (7, 8), (11, 12)])  # 블록 간 다리
+    G.add_edges_from([(3, 4), (7, 8), (11, 12)])  # bridges between blocks
     return G
 
 
 def teacher_data(G: nx.Graph, n: int, rng) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """참 그래프에서 nonparanormal 데이터 생성. 반환: (X, C, Omega)."""
+    """Generate nonparanormal data from the true graph. Returns: (X, C, Omega)."""
     p = N_FEAT
     Om = np.eye(p) * 1.0
     for u, v in G.edges():
         w = rng.uniform(0.35, 0.55) * rng.choice([-1, 1])
         Om[u, v] = Om[v, u] = w
-    Om += np.eye(p) * (abs(np.linalg.eigvalsh(Om).min()) + 0.15)  # 양정치 보장
+    Om += np.eye(p) * (abs(np.linalg.eigvalsh(Om).min()) + 0.15)  # ensure positive definiteness
 
     Sigma = np.linalg.inv(Om)
     d = np.sqrt(np.diag(Sigma))
     Sigma = Sigma / np.outer(d, d)
 
     g = rng.multivariate_normal(np.zeros(p), Sigma, size=n)
-    # 차원별 비선형 단조 변환 -> 비정규 주변분포
+    # Per-dimension nonlinear monotone transform -> non-normal marginals
     X = np.column_stack([
         np.sign(g[:, j]) * np.abs(g[:, j]) ** (1.0 + 0.5 * (j % 3)) if j % 3 else np.exp(0.5 * g[:, j])
         for j in range(p)
     ])
     X = (X - X.mean(0)) / (X.std(0) + 1e-8)
 
-    y = (rng.random(n) < 0.1).astype(float)  # 조건 (사망 라벨 모사)
+    y = (rng.random(n) < 0.1).astype(float)  # condition (mimics the mortality label)
     C = np.column_stack([y, rng.normal(0, 1, n), rng.random(n) < 0.5, rng.integers(0, 3, n)]).astype(float)
     return X, C, Om
 
@@ -87,15 +92,15 @@ def main() -> None:
     X, C, _ = teacher_data(G_true, N_TRAIN, rng)
 
     print("=" * 78)
-    print("통제된 합성 그래프 벤치마크 (v2 §10)")
+    print("Controlled synthetic-graph benchmark (v2 §10)")
     print("=" * 78)
-    print(f"  teacher: {N_FEAT}노드 {G_true.number_of_edges()}간선  "
-          f"지름={nx.diameter(G_true)}  군집계수={nx.average_clustering(G_true):.3f}")
-    print(f"  깊이 L={DEPTH} (도달 반경 {2*DEPTH})   n_train={N_TRAIN:,}  seeds={SEEDS}")
+    print(f"  teacher: {N_FEAT} nodes {G_true.number_of_edges()} edges  "
+          f"diameter={nx.diameter(G_true)}  clustering={nx.average_clustering(G_true):.3f}")
+    print(f"  depth L={DEPTH} (reach radius {2*DEPTH})   n_train={N_TRAIN:,}  seeds={SEEDS}")
 
     n_reach = sum(1 for u in range(N_FEAT) for v in range(u + 1, N_FEAT)
                   if nx.shortest_path_length(G_true, u, v) <= 2 * DEPTH)
-    print(f"  aligned에서 도달 가능한 쌍: {n_reach}/120")
+    print(f"  pairs reachable under aligned: {n_reach}/120")
     print()
 
     gr = np.random.default_rng(7)
@@ -112,7 +117,7 @@ def main() -> None:
         "no_entangle": nx.empty_graph(N_FEAT),
     }
 
-    print(f"  {'모델':<14} {'|E|':>4} {'전체120쌍 오차':>16}  (평균 ± 표준편차, seed 3개)")
+    print(f"  {'model':<14} {'|E|':>4} {'120-pair error':>16}  (mean ± std, 3 seeds)")
     print("  " + "-" * 60)
 
     results = {}
@@ -123,7 +128,7 @@ def main() -> None:
             cfg = Cfg(depth=DEPTH, seed=s)
             Gm, _ = train(X, C, list(Gv.edges()), cfg)
             Xs = generate(Gm, C, N_SYN, seed=s)
-            errs.append(dependency_error(X, Xs))  # 120쌍 전체 [리뷰 B-2]
+            errs.append(dependency_error(X, Xs))  # all 120 pairs [review B-2]
         results[name] = np.array(errs)
         print(f"  {name:<14} {Gv.number_of_edges():>4} "
               f"{errs and np.mean(errs):>10.4f} ± {np.std(errs):.4f}   ({time.time()-t0:.0f}s)",
@@ -131,18 +136,18 @@ def main() -> None:
 
     print()
     print("=" * 78)
-    print("확증 대조")
+    print("Confirmatory contrasts")
     print("=" * 78)
     a = results["aligned"]
     for ref in ("permuted", "distmatched", "rewired", "no_entangle"):
         b = results[ref]
         delta = a.mean() - b.mean()
         print(f"  aligned - {ref:<12} = {delta:+.4f}   "
-              f"{'aligned 우세' if delta < 0 else 'aligned 열세'}")
+              f"{'aligned better' if delta < 0 else 'aligned worse'}")
     print()
-    print("  기대: aligned < permuted (임상 정렬 효과)")
-    print("        aligned <= distmatched 이면, 효과가 단순 거리 배치를 넘어선다는 뜻 [리뷰 B]")
-    print("        no_entangle이 가장 나쁘면, 얽힘이 실제로 의존성을 만든다는 뜻")
+    print("  Expected: aligned < permuted (the clinical-alignment effect)")
+    print("            aligned <= distmatched means the effect goes beyond mere distance layout [review B]")
+    print("            no_entangle being worst means entanglement really is what creates dependency")
 
     np.savez("results_benchmark.npz", **results)
 

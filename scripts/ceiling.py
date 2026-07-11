@@ -1,20 +1,23 @@
-"""게이트 실험: 얕은 graph-local 양자 생성기의 상관 표현력 천장.
+"""Gate experiment: the correlation-expressivity ceiling of a shallow graph-local quantum
+generator.
 
-질문:
-    깊이 L의 회로에서, 그래프 거리 d인 두 특징 사이에 만들어낼 수 있는
-    조건부 의존성의 최대 크기는 얼마인가?
+The question:
+    In a depth-L circuit, what is the largest conditional dependency that can be created
+    between two features at graph distance d?
 
-왜 중요한가:
-    x~_u = h_u(q_u, c) 이고 h_u는 단조 1차원 맵이므로, HDE가 계산되는
-    nonparanormal 공간의 상관은 head와 무관하게 q의 copula로만 결정된다.
-    따라서 천장은 순전히 회로의 성질이다.
+Why it matters:
+    Since x~_u = h_u(q_u, c) and h_u is a monotone one-dimensional map, the correlation in
+    the nonparanormal space — the space in which the HDE is computed — is determined solely
+    by the copula of q, independently of the head. The ceiling is therefore purely a property
+    of the circuit.
 
-    실제 임상 부분상관에는 |rho| > 0.9 인 쌍이 있다 (Hb-Hct, SBP-MAP-DBP).
-    천장이 그보다 낮으면 CDG와 permuted-CDG 양쪽이 천장에 붙어버려
-    확증 대조가 뭉개진다. -> 설계를 바꿔야 한다.
+    Real clinical partial correlations include pairs with |rho| > 0.9 (Hb-Hct, SBP-MAP-DBP).
+    If the ceiling is below that, both the CDG and the permuted CDG saturate against it and
+    the confirmatory contrast is washed out. -> the design must change.
 
-부수 효과:
-    d > 2L 에서 상관이 0으로 나오면 v2 §4.8의 따름정리가 수치로 검증된다.
+Side benefit:
+    If the correlation comes out as 0 for d > 2L, the corollary of v2 §4.8 is verified
+    numerically.
 """
 
 from __future__ import annotations
@@ -33,26 +36,27 @@ from qsim import GraphLocalQuantumGenerator, normal_score_corr, pearson  # noqa:
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 STEPS = 400
 RESTARTS = 3
-EVAL_BATCH = 16384  # no_grad -> 중간텐서가 없으므로 크게 잡아도 된다
-MEM_BUDGET = 6e9    # autograd 중간텐서 예산 (bytes)
+EVAL_BATCH = 16384  # no_grad -> no intermediate tensors, so this can be large
+MEM_BUDGET = 6e9    # budget for the autograd intermediate tensors (bytes)
 
 
 def train_batch(n: int, depth: int) -> int:
-    """autograd 중간텐서가 메모리 예산 안에 들도록 훈련 배치를 정한다.
+    """Choose the training batch so the autograd intermediate tensors fit in the memory budget.
 
-    중간텐서 개수 ~ 5*L*n, 각각 B * 2^n * 8 bytes (complex64).
-    n=13, L=3에서 배치 4096이면 ~50GB로 32GB VRAM을 넘긴다.
+    Number of intermediate tensors ~ 5*L*n, each B * 2^n * 8 bytes (complex64).
+    At n=13, L=3, a batch of 4096 comes to ~50GB, which blows past 32GB of VRAM.
     """
     per = 5 * depth * n * (2**n) * 8
     return int(np.clip(MEM_BUDGET / per, 256, 8192))
 
 
 def max_corr(depth: int, dist: int, seed_base: int = 0) -> tuple[float, float, int]:
-    """경로 그래프에서 거리 dist인 쌍의 최대 달성 가능 상관.
+    """The maximum achievable correlation for a pair at distance dist on a path graph.
 
-    반환: (nonparanormal 공간 |상관|, Pearson |상관|, 훈련 배치)
+    Returns: (|correlation| in the nonparanormal space, Pearson |correlation|, training batch)
     """
-    # u 양옆으로 light cone 반경 L 만큼 패딩. 경로 그래프이므로 거리 = 인덱스 차.
+    # pad on both sides of u by the light cone radius L. On a path graph, distance = index
+    # difference.
     n = 2 * depth + dist + 1
     u, v = depth, depth + dist
     edges = [(i, i + 1) for i in range(n - 1)]
@@ -65,21 +69,21 @@ def max_corr(depth: int, dist: int, seed_base: int = 0) -> tuple[float, float, i
         opt = torch.optim.Adam(gen.parameters(), lr=0.05)
 
         z = 2 * torch.rand(B, n, device=DEVICE) - 1   # local latent, iid
-        y = torch.zeros(B, device=DEVICE)             # 조건 고정 (conditional on c)
+        y = torch.zeros(B, device=DEVICE)             # condition held fixed (conditional on c)
 
         for _ in range(STEPS):
             opt.zero_grad(set_to_none=True)
             q = gen(z, y)
-            loss = -pearson(q[:, u], q[:, v]).abs()   # 미분 가능한 대리 목적함수
+            loss = -pearson(q[:, u], q[:, v]).abs()   # differentiable surrogate objective
             loss.backward()
             opt.step()
 
-        # 평가는 큰 배치에서 no_grad로 -> 추정 오차를 줄인다
+        # evaluate under no_grad on a large batch -> reduces the estimation error
         with torch.no_grad():
             ze = 2 * torch.rand(EVAL_BATCH, n, device=DEVICE) - 1
             ye = torch.zeros(EVAL_BATCH, device=DEVICE)
             qe = gen(ze, ye).cpu().numpy()
-        ns = abs(normal_score_corr(qe[:, u], qe[:, v]))  # HDE가 사는 공간에서 보고
+        ns = abs(normal_score_corr(qe[:, u], qe[:, v]))  # report in the space where the HDE lives
         pe = abs(float(np.corrcoef(qe[:, u], qe[:, v])[0, 1]))
         best_ns, best_p = max(best_ns, ns), max(best_p, pe)
         del gen, z, y
@@ -90,12 +94,13 @@ def max_corr(depth: int, dist: int, seed_base: int = 0) -> tuple[float, float, i
 
 def main() -> None:
     print("=" * 74)
-    print("회로 상관 표현력 천장  (graph-local RZZ 생성기, 경로 그래프)")
+    print("Circuit correlation-expressivity ceiling  (graph-local RZZ generator, path graph)")
     print(f"device={DEVICE}  steps={STEPS}  restarts={RESTARTS}  eval_batch={EVAL_BATCH}")
     print("=" * 74)
     print()
-    print("  값 = 달성 가능한 최대 |상관| (nonparanormal 공간 = HDE가 계산되는 공간)")
-    print("  회색 배경(--) = 이론상 0이어야 하는 영역 (d > 2L)")
+    print("  value = maximum achievable |correlation| (nonparanormal space = the space in which")
+    print("          the HDE is computed)")
+    print("  shaded (--) = the region that should be 0 in theory (d > 2L)")
     print()
 
     depths = [1, 2, 3]
@@ -120,50 +125,50 @@ def main() -> None:
         rows.append(row)
         print(row, flush=True)
     print()
-    print("  요약")
+    print("  Summary")
     print(header)
     for r in rows:
         print(r)
     print()
-    print("  * = d > 2L, 따름정리 1에 의해 0이어야 하는 칸")
+    print("  * = d > 2L, the cells that must be 0 by Corollary 1")
     print()
 
-    # ---- 따름정리 검증 ----
+    # ---- Verify the corollary ----
     print("=" * 74)
-    print("검증 1: light-cone 따름정리 (d > 2L  =>  조건부 상관 = 0)")
+    print("Check 1: the light-cone corollary (d > 2L  =>  conditional correlation = 0)")
     print("=" * 74)
     inside = [(k, v[0]) for k, v in results.items() if k[1] <= 2 * k[0]]
     outside = [(k, v[0]) for k, v in results.items() if k[1] > 2 * k[0]]
     max_out = max((v for _, v in outside), default=0.0)
     min_in = min((v for _, v in inside), default=0.0)
-    print(f"  light cone 안 (d <= 2L): 최소 |corr| = {min_in:.4f}   ({len(inside)}칸)")
-    print(f"  light cone 밖 (d >  2L): 최대 |corr| = {max_out:.4f}   ({len(outside)}칸)")
+    print(f"  inside the light cone  (d <= 2L): min |corr| = {min_in:.4f}   ({len(inside)} cells)")
+    print(f"  outside the light cone (d >  2L): max |corr| = {max_out:.4f}   ({len(outside)} cells)")
     ok = max_out < 0.02
-    print(f"  -> 따름정리 1 {'PASS' if ok else 'FAIL'}: 밖에서는 상관을 만들 수 없다")
+    print(f"  -> Corollary 1 {'PASS' if ok else 'FAIL'}: no correlation can be created outside the cone")
     print()
 
-    # ---- 게이트 판정 ----
+    # ---- Gate verdict ----
     print("=" * 74)
-    print("검증 2: 게이트 — 실제 임상 부분상관이 천장 안에 들어오는가")
+    print("Check 2: the gate — do the real clinical partial correlations fit under the ceiling?")
     print("=" * 74)
     targets = {
         "Hemoglobin-Hematocrit": 0.95,
         "SBP-MAP":               0.90,
         "Creatinine-BUN":        0.60,
         "Na-Cl":                 0.55,
-        "약한 임상 관계 다수":     0.20,
+        "many weak clinical relations": 0.20,
     }
     print()
     for L in depths:
-        c1 = results[(L, 1)][0]  # 인접 쌍 = 최선의 경우
-        print(f"  L={L}, 인접 쌍(d=1) 천장 = {c1:.3f}")
+        c1 = results[(L, 1)][0]  # adjacent pair = the best case
+        print(f"  L={L}, ceiling for an adjacent pair (d=1) = {c1:.3f}")
         for name, tgt in targets.items():
             ok_t = c1 >= tgt
             print(f"      {'OK  ' if ok_t else 'FAIL'}  {name:<24} |rho|={tgt:.2f}")
         print()
 
     np.save("results_ceiling.npy", results, allow_pickle=True)
-    print("  -> results_ceiling.npy 저장")
+    print("  -> saved results_ceiling.npy")
 
 
 if __name__ == "__main__":

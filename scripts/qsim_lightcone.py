@@ -1,19 +1,19 @@
-"""Light-cone 부분회로 시뮬레이터 — 자기 정리를 계산에 써먹는다 [리뷰 D-1].
+"""Light-cone subcircuit simulator — putting our own theorem to computational use [review D-1].
 
-명제 1 (v2 §4.7):
-    초기 상태가 product이고 encoding이 local이면,
-    <Z_u> 는 그래프 반경 L 이내의 큐비트에만 의존한다.
+Proposition 1 (v2 §4.7):
+    With a product initial state and local encoding, <Z_u> depends only on the
+    qubits within graph radius L of u.
 
-따라서 <Z_u>를 구하는 데 2^16 = 65,536 차원 전체 상태벡터가 필요 없다.
-N_L(u) 로 유도된 부분회로만 정확히(근사가 아니라 정확히) 시뮬레이션하면 된다.
+So computing <Z_u> does not require the full 2^16 = 65,536-dimensional statevector.
+It suffices to simulate the subcircuit induced by N_L(u) — exactly, not approximately.
 
-    L=1, Delta<=3  ->  |N_1(u)| <= 4   ->  16 차원
-    L=2, Delta<=3  ->  |N_2(u)| <= 10  ->  1,024 차원
+    L=1, Delta<=3  ->  |N_1(u)| <= 4   ->  16 dimensions
+    L=2, Delta<=3  ->  |N_2(u)| <= 10  ->  1,024 dimensions
 
-메모리가 수천 배 줄고, 훈련이 훨씬 빨라진다. 전체 상태벡터는 finite-shot
-비트스트링 샘플링(inference)에서만 필요하다.
+Memory drops by a factor of thousands and training gets far faster. The full
+statevector is only needed for finite-shot bitstring sampling (inference).
 
-정확성은 `verify_against_full()`이 전체 시뮬레이터와 대조해 보장한다.
+`verify_against_full()` guarantees exactness by checking against the full simulator.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from qsim import C64, _zsign
 
 
 def neighborhood(edges, n: int, u: int, L: int) -> list[int]:
-    """N_L(u) — 그래프 거리 L 이내의 노드 (정렬)."""
+    """N_L(u) — the nodes within graph distance L of u (sorted)."""
     G = nx.Graph()
     G.add_nodes_from(range(n))
     G.add_edges_from(edges)
@@ -33,20 +33,20 @@ def neighborhood(edges, n: int, u: int, L: int) -> list[int]:
 
 
 class LightconeGenerator(torch.nn.Module):
-    """전체 상태벡터 대신 큐비트별 light-cone 부분회로만 시뮬레이션한다.
+    """Simulates only the per-qubit light-cone subcircuits instead of the full statevector.
 
-    출력은 전체 시뮬레이터와 수치적으로 동일하다 (근사가 아님).
-    파라미터는 전체 모델과 공유하므로 그대로 교체 가능하다.
+    The output is numerically identical to the full simulator (not an approximation).
+    Parameters are shared with the full model, so it is a drop-in replacement.
     """
 
     def __init__(self, full_gen, edges, n: int, depth: int):
         super().__init__()
-        self.g = full_gen  # 파라미터 소유자 (GraphLocalQuantumGenerator)
+        self.g = full_gen  # parameter owner (GraphLocalQuantumGenerator)
         self.n, self.L = n, depth
         self.edges = list(edges)
         edge_idx = {tuple(sorted(e)): k for k, e in enumerate(self.edges)}
 
-        # 각 출력 큐비트 u마다: 부분회로에 들어갈 노드와 간선을 미리 계산
+        # For each output qubit u: precompute the nodes and edges of its subcircuit
         self.cones, self.local_edges, self.local_idx = [], [], []
         cone_edge_idx = []
         for u in range(n):
@@ -148,7 +148,7 @@ class LightconeGenerator(torch.nn.Module):
 
 
 def verify_against_full(n=8, depth=1, seed=0, tol=1e-4) -> None:
-    """부분회로 결과가 전체 상태벡터와 일치하는지 검증한다."""
+    """Verify that the subcircuit result agrees with the full statevector."""
     import numpy as np
 
     from qsim import GraphLocalQuantumGenerator
@@ -169,12 +169,12 @@ def verify_against_full(n=8, depth=1, seed=0, tol=1e-4) -> None:
 
     sizes = [len(c) for c in cone.cones]
     print(f"  n={n} L={depth} Delta=3")
-    print(f"    전체 상태벡터   : 2^{n} = {2**n:,} 차원")
-    print(f"    light-cone 부분 : 최대 2^{max(sizes)} = {2**max(sizes):,} 차원  "
-          f"(cone 크기 {min(sizes)}~{max(sizes)})")
-    print(f"    절감 배율       : {2**n / 2**max(sizes):.0f}x")
-    print(f"    <Z_u> 최대 오차 : {err:.2e}   {'PASS' if err < tol else 'FAIL'}")
-    assert err < tol, f"부분회로가 전체와 불일치! err={err}"
+    print(f"    full statevector : 2^{n} = {2**n:,} dimensions")
+    print(f"    light-cone part  : at most 2^{max(sizes)} = {2**max(sizes):,} dimensions  "
+          f"(cone sizes {min(sizes)}~{max(sizes)})")
+    print(f"    speedup factor   : {2**n / 2**max(sizes):.0f}x")
+    print(f"    max <Z_u> error  : {err:.2e}   {'PASS' if err < tol else 'FAIL'}")
+    assert err < tol, f"subcircuit disagrees with the full simulator! err={err}"
 
 
 if __name__ == "__main__":
@@ -182,10 +182,10 @@ if __name__ == "__main__":
 
     sys.stdout.reconfigure(encoding="utf-8")
     print("=" * 66)
-    print("Light-cone 부분회로 시뮬레이터 검증 [리뷰 D-1]")
+    print("Light-cone subcircuit simulator verification [review D-1]")
     print("=" * 66)
     for n, L in [(8, 1), (10, 1), (12, 1), (16, 1), (12, 2)]:
         verify_against_full(n=n, depth=L)
         print()
-    print("  -> 명제 1을 계산에 써먹으면 <Z_u>를 정확히 유지하면서")
-    print("     상태벡터 차원을 수천 배 줄일 수 있다.")
+    print("  -> Exploiting Proposition 1 computationally shrinks the statevector")
+    print("     dimension by a factor of thousands while keeping <Z_u> exact.")

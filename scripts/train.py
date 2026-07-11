@@ -1,14 +1,17 @@
-"""CDG-QGAN 학습 (conditional WGAN-GP) + 의존성 복원 평가.
+"""CDG-QGAN training (conditional WGAN-GP) + dependency-recovery evaluation.
 
-v2 §8.10: primary model은 WGAN-GP만 사용한다.
-  - CDG edge loss, 상관 손실, 임상 제약 손실, auxiliary classifier 없음
-  - 평가 지표를 직접 최적화하는 순환 논증을 제거하기 위함
-  - 따라서 관찰되는 구조 복원 차이는 오직 회로 토폴로지의 inductive bias다
+v2 §8.10: the primary model uses WGAN-GP only.
+  - no CDG edge loss, no correlation loss, no clinical-constraint loss, no auxiliary
+    classifier
+  - this removes the circular argument of directly optimizing the evaluation metric
+  - therefore any observed difference in structure recovery is purely the inductive
+    bias of the circuit topology
 
-평가 [리뷰 B-2 반영]:
-  primary  = 120쌍 전체 조건부 의존성 오차 (위음성 + 위양성 모두 잡음)
-  보조     = held-out 간선 오차 (비순환성 확인용)
-  둘 다 nonparanormal 공간에서 계산한다 [리뷰 A-2].
+Evaluation [incorporating review B-2]:
+  primary   = conditional dependency error over all 120 pairs (catches both false
+              negatives and false positives)
+  secondary = held-out edge error (to check non-circularity)
+  Both are computed in the nonparanormal space [review A-2].
 """
 
 from __future__ import annotations
@@ -39,24 +42,25 @@ class Cfg:
     steps: int = 3000
     head_width: int = 8
     seed: int = 0
-    use_cuda_graph: bool = True  # 검증용으로 끌 수 있어야 한다 (PM 요구)
+    use_cuda_graph: bool = True  # must be switchable off for verification (PM requirement)
 
 
 # ---------------------------------------------------------------------------
-# 평가: nonparanormal 공간의 조건부 부분상관
+# Evaluation: conditional partial correlation in the nonparanormal space
 # ---------------------------------------------------------------------------
 def _npn(X: np.ndarray) -> np.ndarray:
-    """rank -> inverse normal. HDE는 반드시 이 공간에서 계산해야 한다 [리뷰 A-2].
+    """rank -> inverse normal. HDE must be computed in this space [review A-2].
 
-    원 단위 Pearson으로 재면 폭-8 head가 못 맞추는 heavy-tail 주변분포 오차가
-    의존성 지표를 오염시킨다. 단조 head에 불변인 공간에서 재야 한다.
+    Measured with a Pearson correlation in the raw units, the heavy-tailed marginal
+    error that a width-8 head cannot fit would contaminate the dependency metric.
+    It has to be measured in a space that is invariant to a monotone head.
     """
     N = X.shape[0]
     return np.column_stack([norm.ppf((rankdata(X[:, j]) - 0.5) / N) for j in range(X.shape[1])])
 
 
 def partial_corr_matrix(X: np.ndarray, ridge: float = 1e-3) -> np.ndarray:
-    """부분상관 행렬. real/synthetic에 완전히 동일한 정규화를 적용해야 한다."""
+    """Partial correlation matrix. The exact same regularization must be applied to real and synthetic."""
     S = np.corrcoef(_npn(X), rowvar=False)
     P = np.linalg.inv(S + ridge * np.eye(S.shape[0]))
     d = np.sqrt(np.diag(P))
@@ -66,17 +70,17 @@ def partial_corr_matrix(X: np.ndarray, ridge: float = 1e-3) -> np.ndarray:
 
 
 def dependency_error(X_real: np.ndarray, X_syn: np.ndarray, pairs=None) -> float:
-    """Fisher-z 공간의 평균 절대 부분상관 오차."""
+    """Mean absolute partial-correlation error in Fisher-z space."""
     Rr, Rs = partial_corr_matrix(X_real), partial_corr_matrix(X_syn)
     zr, zs = np.arctanh(np.clip(Rr, -0.999, 0.999)), np.arctanh(np.clip(Rs, -0.999, 0.999))
     p = Rr.shape[0]
-    if pairs is None:  # 120쌍 전체 (primary) — 위양성도 잡는다
+    if pairs is None:  # all 120 pairs (primary) — also catches false positives
         pairs = [(i, j) for i in range(p) for j in range(i + 1, p)]
     return float(np.mean([abs(zs[i, j] - zr[i, j]) for i, j in pairs]))
 
 
 # ---------------------------------------------------------------------------
-# 학습
+# Training
 # ---------------------------------------------------------------------------
 def gradient_penalty(critic, x_real, x_fake, c) -> torch.Tensor:
     a = torch.rand(x_real.size(0), 1, device=x_real.device)
@@ -87,7 +91,7 @@ def gradient_penalty(critic, x_real, x_fake, c) -> torch.Tensor:
 
 
 def train(X: np.ndarray, C: np.ndarray, edges, cfg: Cfg, log_every: int = 0):
-    """X: (N, n) 실제 특징 (이미 scaling됨).  C: (N, cond_dim) 조건 벡터."""
+    """X: (N, n) real features (already scaled).  C: (N, cond_dim) condition vectors."""
     torch.manual_seed(cfg.seed)
     N, n = X.shape
     Xt = torch.tensor(X, dtype=torch.float32, device=DEVICE)
@@ -191,7 +195,7 @@ def train(X: np.ndarray, C: np.ndarray, edges, cfg: Cfg, log_every: int = 0):
 
 @torch.no_grad()
 def generate(G: CDGQGAN, C: np.ndarray, n_samples: int, seed: int = 0) -> np.ndarray:
-    """조건 분포를 실제와 맞춰 합성 표본 생성."""
+    """Generate synthetic samples with the condition distribution matched to the real one."""
     torch.manual_seed(seed)
     idx = np.random.default_rng(seed).integers(0, len(C), n_samples)
     c = torch.tensor(C[idx], dtype=torch.float32, device=DEVICE)

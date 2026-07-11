@@ -1,14 +1,16 @@
-"""Graph-local 양자 생성기의 batched statevector 시뮬레이터 (CDG-QGAN v2 §4.2).
+"""Batched statevector simulator for the graph-local quantum generator (CDG-QGAN v2 §4.2).
 
-회로 블록 (오른쪽이 먼저 작동):
+Circuit block (rightmost acts first):
     U^(l) = R_mix^(l) . E_G^(l) . S_enc^(l)
 
-  S_enc : 큐비트별 local encoding.  각도는 해당 큐비트의 local latent z_u와 조건 y만 사용.
-  E_G   : CDG 간선에만 RZZ (대각 게이트).
-  R_mix : 큐비트별 비가환 RX/RY.  이게 없으면 RZZ가 Z와 가환이라 얽힘 파라미터의
-          gradient가 0이 된다 (부록 B-1/B-2에서 수치 확인됨).
+  S_enc : per-qubit local encoding.  The angles use only that qubit's local latent
+          z_u and the condition y.
+  E_G   : RZZ on the CDG edges only (diagonal gate).
+  R_mix : per-qubit non-commuting RX/RY.  Without it, RZZ commutes with Z and the
+          gradient of the entangling parameters is exactly 0 (confirmed numerically
+          in Appendix B-1/B-2).
 
-큐비트 0 = 최상위 비트.
+Qubit 0 = most significant bit.
 """
 
 from __future__ import annotations
@@ -20,13 +22,13 @@ C64 = torch.complex64
 
 
 # --------------------------------------------------------------------------
-# 게이트
+# Gates
 # --------------------------------------------------------------------------
 def _apply_1q(psi: torch.Tensor, n: int, q: int, a00, a01, a10, a11) -> torch.Tensor:
-    """큐비트 q에 2x2 게이트 [[a00,a01],[a10,a11]] 적용.
+    """Apply the 2x2 gate [[a00,a01],[a10,a11]] to qubit q.
 
-    psi: (B, 2**n) complex. 계수 a**는 (B,1) 또는 스칼라로 브로드캐스트 가능해야 함
-    (샘플마다 각도가 다른 data encoding을 지원하기 위함).
+    psi: (B, 2**n) complex. The coefficients a** must broadcast as (B,1) or as
+    scalars (so that data encoding with a per-sample angle is supported).
     """
     B = psi.shape[0]
     left, right = 2**q, 2 ** (n - q - 1)
@@ -57,17 +59,18 @@ def rz(psi, n, q, t):
 
 
 def _zsign(n: int, q: int, device) -> torch.Tensor:
-    """계산 기저에서 큐비트 q의 Z 고유값 (+1 / -1)."""
+    """Z eigenvalue (+1 / -1) of qubit q in the computational basis."""
     idx = torch.arange(2**n, device=device)
     bit = (idx >> (n - q - 1)) & 1
     return 1.0 - 2.0 * bit.to(torch.float32)
 
 
 def rzz(psi, n, u, v, gamma, cache):
-    """RZZ(gamma) = exp(-i gamma/2 Z_u Z_v). 대각이므로 위상 곱으로 구현.
+    """RZZ(gamma) = exp(-i gamma/2 Z_u Z_v). Diagonal, so implemented as a phase multiply.
 
-    캐시 키에 n을 반드시 포함해야 한다. light-cone 부분회로는 큐비트 수 m이
-    cone마다 다르므로, (u,v)만으로 키를 잡으면 크기가 다른 부호 벡터가 충돌한다.
+    The cache key must include n. The light-cone subcircuits have a qubit count m
+    that differs from cone to cone, so keying on (u,v) alone would make sign vectors
+    of different lengths collide.
     """
     key = (n, u, v)
     if key not in cache:
@@ -78,10 +81,10 @@ def rzz(psi, n, u, v, gamma, cache):
 
 
 # --------------------------------------------------------------------------
-# 생성기
+# Generator
 # --------------------------------------------------------------------------
 class GraphLocalQuantumGenerator(torch.nn.Module):
-    """v2 §8의 graph-local 양자 코어. 출력은 큐비트별 <Z_u> 하나씩."""
+    """The graph-local quantum core of v2 §8. Outputs one <Z_u> per qubit."""
 
     def __init__(self, n_qubits: int, edges: list[tuple[int, int]], depth: int, seed: int = 0):
         super().__init__()
@@ -92,10 +95,10 @@ class GraphLocalQuantumGenerator(torch.nn.Module):
         def p(*shape, scale=1.0):
             return torch.nn.Parameter(scale * (2 * torch.rand(*shape, generator=g) - 1))
 
-        # local encoding: angle = a*z + b*y + c   (축별로 따로)
+        # local encoding: angle = a*z + b*y + c   (separately per axis)
         self.a_y, self.b_y, self.c_y = p(L, n, scale=np.pi), p(L, n), p(L, n)
         self.a_z, self.b_z, self.c_z = p(L, n, scale=np.pi), p(L, n), p(L, n)
-        # 얽힘: 0 근방 작은 초기값 (v2 §8.4)
+        # entangling: small initial values near 0 (v2 §8.4)
         self.gamma = p(L, max(E, 1), scale=0.1)
         # local mixing
         self.tx, self.ty = p(L, n), p(L, n)
@@ -104,7 +107,7 @@ class GraphLocalQuantumGenerator(torch.nn.Module):
         self._zsign_cache: dict = {}
 
     def forward(self, z: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """z: (B, n) local latents.  y: (B,) 조건.  반환: (B, n) = <Z_u>."""
+        """z: (B, n) local latents.  y: (B,) condition.  Returns: (B, n) = <Z_u>."""
         B, n = z.shape
         psi = torch.zeros(B, 2**n, dtype=C64, device=z.device)
         psi[:, 0] = 1.0
@@ -114,9 +117,9 @@ class GraphLocalQuantumGenerator(torch.nn.Module):
             for u in range(n):  # S_enc : local
                 psi = ry(psi, n, u, self.a_y[l, u] * z[:, u] + self.b_y[l, u] * yv + self.c_y[l, u])
                 psi = rz(psi, n, u, self.a_z[l, u] * z[:, u] + self.b_z[l, u] * yv + self.c_z[l, u])
-            for k, (u, v) in enumerate(self.edges):  # E_G : CDG 간선
+            for k, (u, v) in enumerate(self.edges):  # E_G : CDG edges
                 psi = rzz(psi, n, u, v, self.gamma[l, k], self._zcache)
-            for u in range(n):  # R_mix : 비가환. 없으면 gamma가 안 배운다.
+            for u in range(n):  # R_mix : non-commuting. Without it gamma never learns.
                 psi = rx(psi, n, u, self.tx[l, u])
                 psi = ry(psi, n, u, self.ty[l, u])
 
@@ -129,7 +132,7 @@ class GraphLocalQuantumGenerator(torch.nn.Module):
 
 
 # --------------------------------------------------------------------------
-# 상관 지표
+# Correlation metrics
 # --------------------------------------------------------------------------
 def pearson(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     a = a - a.mean()
@@ -138,9 +141,10 @@ def pearson(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 
 def normal_score_corr(a: np.ndarray, b: np.ndarray) -> float:
-    """nonparanormal(rank -> inverse normal) 공간의 상관.
+    """Correlation in the nonparanormal (rank -> inverse normal) space.
 
-    HDE가 실제로 계산되는 공간이며, 단조 head h_u에 대해 불변이다.
+    This is the space HDE is actually computed in, and it is invariant to a
+    monotone head h_u.
     """
     from scipy.stats import norm, rankdata
 

@@ -1,54 +1,65 @@
-# 결과: 회로 표현력 천장 & light-cone 검증
+# Results: Circuit Expressivity Ceiling & Light-Cone Verification
 
-스크립트: `scripts/ceiling.py` · 실행: 2026-07-11 · RTX 5090
+Script: `scripts/ceiling.py` · Run: 2026-07-11 · RTX 5090
 
-## 설정
+## Setup
 
-경로 그래프에서 거리 `d`인 특징 쌍을 잡고, 회로 파라미터를 최적화해
-**도달 가능한 최대 조건부 상관**을 구했다. 값은 **nonparanormal 공간**(HDE가 계산되는
-공간)에서 잰다. `x̃_u = h_u(q_u, c)`이고 `h_u`가 단조 1차원 맵이므로 이 공간의 상관은
-**head와 무관하게 `q`의 copula로만 결정된다** — 즉 천장은 순전히 회로의 성질이다.
+On a path graph, we take feature pairs at distance `d` and optimize the circuit
+parameters to obtain the **maximum reachable conditional correlation**. Values are
+measured in the **nonparanormal space** (the space in which HDE is computed). Since
+`x̃_u = h_u(q_u, c)` and `h_u` is a monotone one-dimensional map, correlations in this
+space are **determined solely by the copula of `q`, independently of the head** — that is,
+the ceiling is purely a property of the circuit.
 
-각 칸: 3회 재시작 × 400 step Adam, 평가는 16,384 표본 `no_grad`.
+Each cell: 3 restarts × 400 Adam steps; evaluation on 16,384 samples under `no_grad`.
 
-## 표
+## Table
 
-**달성 가능한 최대 |상관|** (굵게 = light cone 밖, 이론상 0이어야 하는 칸)
+**Maximum achievable |correlation|** (bold = outside the light cone, cells that should
+theoretically be 0)
 
 | | d=1 | d=2 | d=3 | d=4 | d=5 | d=6 |
 |---|---|---|---|---|---|---|
-| **L=1** (반경 2) | 0.991 | 0.847 | **0.012** | **0.007** | **0.010** | **0.009** |
-| **L=2** (반경 4) | 0.9999 | 0.995 | 0.997 | 0.861 | **0.009** | **0.012** |
+| **L=1** (radius 2) | 0.991 | 0.847 | **0.012** | **0.007** | **0.010** | **0.009** |
+| **L=2** (radius 4) | 0.9999 | 0.995 | 0.997 | 0.861 | **0.009** | **0.012** |
 
-`L=3` 행은 중단했다. 사전 검사에서 `L=3`은 120쌍 전부가 light cone 안에 들어와
-**연구에 쓸 수 없다**고 확정됐으므로(`REVISIONS.md` A-1), 같은 패턴을 세 번째로
-확인하는 데 GPU를 쓸 이유가 없다. `d=1: 0.9985, d=2: 0.9969`까지는 예상대로 나왔다.
+The `L=3` row was abandoned. The precheck established that at `L=3` all 120 pairs fall
+inside the light cone, making it **unusable for this study** (`REVISIONS.md` A-1), so there
+is no reason to spend GPU time confirming the same pattern a third time. Up to
+`d=1: 0.9985, d=2: 0.9969` the results came out as expected.
 
-## 결론
+## Conclusions
 
-**1. 따름정리 1(light cone)이 수치로 입증됐다.**
-절벽이 정확히 `d = 2L`에서 생긴다. 밖에서는 최대 `0.012` — 이건 유한 표본 잡음이지
-표현력이 아니다. `L=1`과 `L=2`에서 독립적으로 재현됐다.
+**1. Corollary 1 (light cone) is numerically confirmed.**
+The cliff appears exactly at `d = 2L`. Outside it, the maximum is `0.012` — this is
+finite-sample noise, not expressivity. It reproduces independently at `L=1` and `L=2`.
 
-**2. 경계 칸의 천장이 두 깊이 모두 ~0.85로 같다.**
-`L=1, d=2` → 0.847, `L=2, d=4` → 0.861. 우연이 아니라 구조적 성질이다.
-light cone 안쪽 깊숙이는 ~0.99, **경계에서 0.85, 밖은 0**.
+**2. The ceiling at the boundary cell is the same, ~0.85, at both depths.**
+`L=1, d=2` → 0.847, `L=2, d=4` → 0.861. This is not a coincidence but a structural
+property. Deep inside the light cone the ceiling is ~0.99, **at the boundary 0.85, and
+outside it 0**.
 
-**3. 게이트 통과 — 표현력은 병목이 아니다.**
-인접 쌍(`d=1`) 천장이 `0.99`이므로, 실제 임상의 강한 부분상관
-(Hemoglobin–Hematocrit ~0.95, SBP–MAP ~0.90)을 회로가 표현할 수 있다.
-**표현력 부족으로 설계가 무너지지는 않는다.**
+**3. Gate passed — expressivity is not the bottleneck.**
+Since the ceiling for adjacent pairs (`d=1`) is `0.99`, the circuit can represent the
+strong partial correlations found in real clinical data (Hemoglobin–Hematocrit ~0.95,
+SBP–MAP ~0.90). **The design does not collapse from insufficient expressivity.**
 
-이것이 이 프로젝트의 존폐를 가르는 관문이었다. 만약 인접 쌍 천장이 0.5 수준이었다면
-CDG와 permuted 양쪽이 천장에 붙어 확증 대조가 뭉개졌을 것이고, 설계를 바꿔야 했다.
+This was the gate that decided whether the project lives or dies. Had the adjacent-pair
+ceiling been on the order of 0.5, both CDG and permuted variants would have been pinned
+against the ceiling, the confirmatory contrast would have been washed out, and the design
+would have had to change.
 
-## 논문에서의 위치
+## Position in the Paper
 
-이 표가 **그림 1**이 된다. 이론(따름정리 1)이 예측한 것과 수치가 어긋나는 지점이 없고,
-동시에 "왜 `L=1`이어야 하는가"를 설명한다:
+This table becomes **Figure 1**. There is no point at which the numbers diverge from what
+the theory (Corollary 1) predicts, and at the same time it explains "why `L=1`":
 
-- `L`이 작을수록 light cone이 좁아 **토폴로지가 변별력을 갖는다**
-- `L=1`에서도 인접 쌍은 `|ρ|=0.99`까지 표현 가능하므로 **표현력을 잃지 않는다**
-- `L=3`이면 모든 쌍이 도달 가능해져 **CDG와 permuted가 동일해진다** (사전 검사 결과)
+- The smaller `L` is, the narrower the light cone, and hence **the topology becomes
+  discriminative**
+- Even at `L=1`, adjacent pairs can be represented up to `|ρ|=0.99`, so **no expressivity
+  is lost**
+- At `L=3` every pair becomes reachable, so **CDG and permuted graphs become identical**
+  (precheck result)
 
-즉 `L=1`은 타협이 아니라 **표현력과 변별력이 동시에 확보되는 유일한 작동점**이다.
+In short, `L=1` is not a compromise but **the unique operating point at which expressivity
+and discriminative power are secured simultaneously**.

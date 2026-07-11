@@ -1,21 +1,26 @@
-"""학습된 모델이 실제로 무엇을 만들고 있는가 (벤치마크 null 진단 2단계).
+"""What is the trained model actually producing (stage 2 of the benchmark null diagnosis).
 
-diag_benchmark.py 결과:
-    의존성 0 모델      = 0.0648
-    학습된 모델        = 0.1359   <- 2.1배 나쁘다
+Results from diag_benchmark.py:
+    zero-dependency model = 0.0648
+    trained model         = 0.1359   <- 2.1x worse
 
-=> 모델은 참 의존성을 못 배우는 게 아니라, **없는 의존성을 지어내고 있다**.
+=> The model is not failing to learn the true dependency; it is **inventing dependency
+   that does not exist**.
 
-가설: 조건 벡터 c 때문이다.
-    생성기는 x~_u = h_u(q_u, c) 이고 c가 모든 특징에 공유된다.
-    -> c를 통제하지 않고 재는 무조건부 부분상관에는 c가 만든 상관이 전부 섞인다.
-    -> 참값(합성 teacher)에는 그 성분이 없다 (C를 X와 독립으로 뽑았으므로).
-    CDG는 "c 조건부"로 정의되는데 평가는 무조건부로 하고 있다 = 추정량 불일치.
+Hypothesis: it is because of the condition vector c.
+    The generator is x~_u = h_u(q_u, c), and c is shared across all features.
+    -> An unconditional partial correlation, measured without controlling for c, mixes in
+       all of the correlation that c creates.
+    -> The ground truth (the synthetic teacher) has no such component (since C was drawn
+       independently of X).
+    The CDG is defined as "conditional on c", yet the evaluation is unconditional
+    = estimator mismatch.
 
-검증:
-    [A] 무조건부 부분상관  (현재 train.dependency_error)
-    [B] c 잔차화 후 부분상관 (CDG 정의와 일치)
-    가설이 맞으면 [B]에서 오차가 floor 아래로 내려가고 aligned/permuted가 갈라진다.
+Verification:
+    [A] unconditional partial correlation  (the current train.dependency_error)
+    [B] partial correlation after residualizing on c (matches the CDG definition)
+    If the hypothesis is right, then under [B] the error drops below the floor and
+    aligned/permuted separate.
 """
 
 from __future__ import annotations
@@ -39,10 +44,11 @@ SEEDS = [0, 1, 2]
 
 
 def partial_corr_resid(X: np.ndarray, C: np.ndarray, ridge: float = 1e-3) -> np.ndarray:
-    """c를 통제한 부분상관 — CDG 정의와 같은 공간.
+    """Partial correlation controlling for c — the same space as the CDG definition.
 
-    nonparanormal 변환 후 c(및 상수항)에 선형회귀하고 잔차의 부분상관을 잰다.
-    build_cdg.py가 CDG를 만들 때 쓰는 것과 동일한 절차.
+    After the nonparanormal transform, linearly regress on c (plus an intercept) and
+    measure the partial correlation of the residuals.
+    The same procedure build_cdg.py uses when it constructs the CDG.
     """
     Xn = _npn(X)
     D = np.column_stack([np.ones(len(C)), C])
@@ -69,10 +75,10 @@ def main() -> None:
     X, C, _ = teacher_data(G, N_TRAIN, rng)
     Gp = isomorphic_permuted(G, np.random.default_rng(7))
 
-    zr_u = Z(partial_corr_matrix(X))          # 무조건부 참값
-    zr_c = Z(partial_corr_resid(X, C))        # c 잔차화 참값
+    zr_u = Z(partial_corr_matrix(X))          # unconditional ground truth
+    zr_c = Z(partial_corr_resid(X, C))        # c-residualized ground truth
 
-    # floor: 의존성 0 모델
+    # floor: zero-dependency model
     fl_u, fl_c = [], []
     for s in range(3):
         r = np.random.default_rng(100 + s)
@@ -82,18 +88,18 @@ def main() -> None:
         fl_c.append(split(zr_c, Z(partial_corr_resid(Xi, Ci)), G))
 
     print("=" * 88)
-    print("학습된 모델은 무엇을 만들고 있는가")
+    print("What is the trained model producing?")
     print("=" * 88)
-    print(f"  {'모델':<22} {'[A] 무조건부 (현재 지표)':>30}   {'[B] c 잔차화 (CDG 정의)':>30}")
-    print(f"  {'':<22} {'120쌍':>9}{'간선19':>9}{'비간선101':>11}   "
-          f"{'120쌍':>9}{'간선19':>9}{'비간선101':>11}")
+    print(f"  {'model':<22} {'[A] unconditional (current)':>30}   {'[B] c-residualized (CDG def.)':>30}")
+    print(f"  {'':<22} {'120pair':>9}{'edge19':>9}{'nonedge101':>11}   "
+          f"{'120pair':>9}{'edge19':>9}{'nonedge101':>11}")
     print("  " + "-" * 84)
 
     def row(name, a, b):
         print(f"  {name:<22} {a[0]:>9.4f}{a[1]:>9.4f}{a[2]:>11.4f}   "
               f"{b[0]:>9.4f}{b[1]:>9.4f}{b[2]:>11.4f}", flush=True)
 
-    row("floor (의존성 0)", np.mean(fl_u, 0), np.mean(fl_c, 0))
+    row("floor (zero dependency)", np.mean(fl_u, 0), np.mean(fl_c, 0))
 
     for name, Gv in [("aligned", G), ("permuted", Gp), ("no_entangle", nx.empty_graph(N_FEAT))]:
         au, ac = [], []
@@ -101,17 +107,17 @@ def main() -> None:
         for s in SEEDS:
             Gm, _ = train(X, C, list(Gv.edges()), Cfg(depth=1, seed=s))
             Xs = generate(Gm, C, N_SYN, seed=s)
-            Cs = C[np.random.default_rng(s).integers(0, len(C), N_SYN)]  # generate와 동일 seed 규칙
+            Cs = C[np.random.default_rng(s).integers(0, len(C), N_SYN)]  # same seed rule as generate
             au.append(split(zr_u, Z(partial_corr_matrix(Xs)), G))
             ac.append(split(zr_c, Z(partial_corr_resid(Xs, Cs)), G))
         row(f"{name} ({time.time()-t0:.0f}s)", np.mean(au, 0), np.mean(ac, 0))
 
     print()
-    print("  읽는 법:")
-    print("    [A]에서 '비간선101' 열이 크면 -> 가짜 의존성을 뿜고 있다 (위양성).")
-    print("    [B]에서 그게 줄면        -> 원인은 공유 조건 c다. 지표를 CDG 정의에 맞추면 된다.")
-    print("    [B]에서도 안 줄면        -> 원인은 c가 아니라 학습/회로다. 더 파야 한다.")
-    print("    aligned vs permuted 가 [B]에서 갈라지면 확증 설계가 살아난다.")
+    print("  How to read this:")
+    print("    If the 'nonedge101' column is large under [A] -> spurious dependency is being spewed out (false positives).")
+    print("    If it shrinks under [B]      -> the cause is the shared condition c. Align the metric with the CDG definition.")
+    print("    If it does not shrink under [B] -> the cause is not c but the training/circuit. Dig further.")
+    print("    If aligned vs permuted separate under [B], the confirmatory design is back in business.")
 
 
 if __name__ == "__main__":

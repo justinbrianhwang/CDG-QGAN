@@ -43,41 +43,41 @@ For `L=1`, CUDA Graph replay and data-buffer copies now dominate rather than ind
 
 ---
 
-## PM 독립 검증 (2026-07-11) — **승인**
+## Independent PM verification (2026-07-11) — **APPROVED**
 
 `scripts/verify_wp6.py`
 
-Codex가 보고한 정확도·속도를 독립적으로 재현했고, **Codex가 검증하지 않은 항목**을
-추가로 확인했다. Codex는 CUDA Graph를 학습 루프에 도입했지만 **그래프 경로가 일반
-경로와 같은 결과를 내는지는 검증하지 않았다.** CUDA Graph는 조용히 틀린 결과를 내는
-대표적 최적화이므로 반드시 확인해야 한다.
+We independently reproduced the accuracy and speed that Codex reported, and additionally checked
+**items Codex did not verify**. Codex introduced CUDA Graphs into the training loop but **did not verify
+that the graph path produces the same results as the ordinary path.** CUDA Graphs are a textbook example
+of an optimization that silently produces wrong results, so this must be confirmed.
 
-| 검증 | 결과 |
+| Verification | Result |
 |---|---|
-| 시뮬레이터 정확도 (독립 재현) | PASS — 전체 상태벡터와 `1.6e-6` 일치 |
-| 회귀 테스트 (독립 재현) | PASS |
-| **[신규] CUDA Graph 내 RNG 전진** | **PASS** — replay마다 다른 난수 |
-| **[신규] 그래프 경로 vs 일반 경로 동등성** | **PASS** — 의존성오차 0.2058 vs 0.2061 |
-| 속도 (3000 step/seed) | **PASS — 25.7초** (목표 60초) |
+| Simulator accuracy (independently reproduced) | PASS — agrees with the full statevector to `1.6e-6` |
+| Regression test (independently reproduced) | PASS |
+| **[new] RNG advancement inside the CUDA Graph** | **PASS** — different random numbers on every replay |
+| **[new] Graph path vs. ordinary path equivalence** | **PASS** — dependency error 0.2058 vs. 0.2061 |
+| Speed (3000 steps/seed) | **PASS — 25.7 s** (target 60 s) |
 
-### 왜 RNG 검증이 필요했는가
+### Why the RNG check was necessary
 
-`gradient_penalty`의 보간 계수 `alpha = torch.rand(...)` 가 CUDA Graph **안**에서
-생성된다. 그래프 replay 사이에 RNG가 전진하지 않으면 **모든 critic 스텝이 같은
-보간점을 쓰게 되어 gradient penalty가 무력화된다.** 학습은 "돌아가는 것처럼" 보이지만
-WGAN-GP가 아니게 되는 조용한 실패다. PyTorch가 graph-safe RNG를 올바로 처리하고
-있어 문제없었으나, 확인 없이 넘어갈 수는 없는 항목이었다.
+The interpolation coefficient in `gradient_penalty`, `alpha = torch.rand(...)`, is generated **inside** the
+CUDA Graph. If the RNG does not advance between graph replays, **every critic step would use the same
+interpolation point and the gradient penalty would be neutralized.** Training would look like it was "working,"
+but it would silently stop being WGAN-GP. PyTorch handles graph-safe RNG correctly, so there was no problem —
+but this was not an item we could let pass unchecked.
 
-### 실제 가속
+### Actual speedup
 
-| 구성 | 3000 step / seed |
+| Configuration | 3000 steps / seed |
 |---|---|
-| 원래 (WP-6 이전 시뮬레이터) | **>1,800초** |
-| 새 시뮬레이터 (CUDA Graph 없이) | ~490초 |
-| **새 시뮬레이터 + CUDA Graph** | **25.7초** |
+| Original (pre-WP-6 simulator) | **>1,800 s** |
+| New simulator (without CUDA Graphs) | ~490 s |
+| **New simulator + CUDA Graphs** | **25.7 s** |
 
-**약 70배.** 확증 실험 90회 학습이 45시간 → **약 40분**이 된다.
+**Roughly 70x.** The 90 training runs of the confirmatory experiment go from 45 hours to **about 40 minutes**.
 
-### 추가된 것
+### What was added
 
-- `Cfg.use_cuda_graph` 플래그 — 그래프 경로를 끄고 검증할 수 있어야 한다.
+- The `Cfg.use_cuda_graph` flag — it must be possible to turn the graph path off and verify against it.

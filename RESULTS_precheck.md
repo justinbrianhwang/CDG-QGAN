@@ -1,124 +1,124 @@
-# 결과: CDG 정렬 사전 검사 (실제 MIMIC-IV v3.1)
+# Results: CDG Alignment Pre-check (real MIMIC-IV v3.1)
 
-스크립트: `scripts/precheck_alignment.py` · 실행: 2026-07-11
-데이터: MIMIC-IV v3.1, 24시간 landmark 코호트, **n = 48,561** (16특징 완전관측)
+Script: `scripts/precheck_alignment.py` · Run: 2026-07-11
+Data: MIMIC-IV v3.1, 24-hour landmark cohort, **n = 48,561** (complete observations on all 16 features)
 
-> **주의 — 아래는 MAP 제거 후의 정직한 값이다.**
-> MAP을 포함한 초기 실행에서는 `L=1` z = **+4.46** 이 나왔으나, MAP은 산술 항등식
-> (`MAP≈(SBP+2DBP)/3`, R²=0.860)이며 SBP–DBP에 **가짜 음의 상관**까지 유도하고 있었다.
-> MAP을 생성 변수에서 제외하자 z = **+3.18** 로 떨어졌다. **그 차이가 곧 "산수였던 부분"이다.**
-> 자세한 근거는 `REVISIONS.md` C-3 및 `scripts/diag_collinearity.py`.
+> **Caution — the values below are the honest ones, obtained after removing MAP.**
+> An initial run that included MAP gave `L=1` z = **+4.46**, but MAP is an arithmetic identity
+> (`MAP≈(SBP+2DBP)/3`, R²=0.860) and it was even inducing a **spurious negative correlation** between SBP and DBP.
+> Once MAP was excluded from the generated variables, z dropped to **+3.18**. **That difference is precisely "the part that was just arithmetic."**
+> For the detailed rationale, see `REVISIONS.md` C-3 and `scripts/diag_collinearity.py`.
 
 ---
 
-## 이 검정이 묻는 것
+## What this test asks
 
-> 임상 의미 정렬이 **표현 가능한 의존성 질량**을 늘리는가?
+> Does clinical-meaning alignment increase the **representable dependency mass**?
 
-따름정리 1에 의해 `d_G(u,v) > 2L` 인 쌍은 조건부 공분산이 **정확히 0**이다.
-따라서 깊이 `L`의 회로가 표현할 수 있는 의존성의 총량은 다음으로 정해진다.
+By Corollary 1, any pair with `d_G(u,v) > 2L` has **exactly zero** conditional covariance.
+Therefore the total dependency mass that a depth-`L` circuit can represent is determined by:
 
 ```
 M(G, L) = Σ_{(u,v)} |ρ_true(u,v)| · 1[ d_G(u,v) ≤ 2L ]
 ```
 
-CDG를 **isomorphic permutation 귀무분포(5,000회)** 와 비교한다. permutation은
-노드 수·간선 수·차수열·삼각형 수·군집계수를 **전부 보존**하고, 오직
-**어떤 임상 쌍이 그 구조 안에 앉는가**만 바꾼다. 따라서 이 검정은
-순수하게 **임상 의미 정렬**만을 잰다.
+We compare the CDG against an **isomorphic permutation null distribution (5,000 draws)**. The permutation
+**preserves everything** — number of nodes, number of edges, degree sequence, triangle count, and clustering
+coefficient — and changes only **which clinical pair sits where inside that structure**. The test therefore
+measures **clinical-meaning alignment** and nothing else.
 
-**훈련을 한 번도 하지 않는다.** GPU를 태우기 전에 확증 실험이 성공할 가능성이
-있는지 판정하는 관문이다.
+**No training is performed at any point.** This is the gate that decides, before burning GPU, whether the
+confirmatory experiment has any chance of succeeding.
 
 ---
 
-## 결과
+## Results
 
-CDG: 16노드 · 23간선 · 최대차수 3 · 지름 5 · 전체 의존성 질량 Σ|ρ| = 6.10
+CDG: 16 nodes · 23 edges · maximum degree 3 · diameter 5 · total dependency mass Σ|ρ| = 6.10
 
-| L | 도달 반경 | 도달 가능 쌍 | CDG 질량 | permutation 귀무 | z | p | 판정 |
+| L | Reach radius | Reachable pairs | CDG mass | Permutation null | z | p | Verdict |
 |---|---|---|---|---|---|---|---|
 | **1** | 2 | 57/120 | **4.83 (79.2%)** | 2.89 ± 0.61<br>[1.05, 5.03] | **+3.18** | **0.0004** | **PASS** |
 | 2 | 4 | 115/120 | 6.00 (98.3%) | 5.84 ± 0.23 | +0.66 | 0.287 | **FAIL** |
-| 3 | 6 | **120/120** | 6.10 (100%) | 6.10 ± 0.00 | 0.00 | 1.000 | 무의미 |
+| 3 | 6 | **120/120** | 6.10 (100%) | 6.10 ± 0.00 | 0.00 | 1.000 | Meaningless |
 
-**`L=1`에서 5,000개 순열 중 CDG를 이긴 것은 단 2개** (p = 0.0004).
+**At `L=1`, only 2 out of 5,000 permutations beat the CDG** (p = 0.0004).
 
-도달 범위 안에 담기는 의존성 질량: **CDG 79.2% vs 무작위 순열 47.4%.**
+Dependency mass falling within reach: **CDG 79.2% vs. random permutation 47.4%.**
 
-### MAP 제거의 대가와 이득
+### The cost and the benefit of removing MAP
 
-| | MAP 포함 (오염) | **MAP 제거 (정직)** |
+| | With MAP (contaminated) | **Without MAP (honest)** |
 |---|---|---|
-| CDG 질량 | 5.55 (90.5%) | 4.83 (79.2%) |
+| CDG mass | 5.55 (90.5%) | 4.83 (79.2%) |
 | z | +4.46 | **+3.18** |
 | p | <0.0001 | **0.0004** |
 
-**z가 +4.46 → +3.18로 떨어진 차이가 곧 "산수였던 부분"이다.**
-MAP을 그대로 두고 갔다면 리뷰어의 "이 중 얼마가 `MAP=(SBP+2DBP)/3` 복원인가?"에
-답할 수 없었다. **남은 z = +3.18 은 전부 진짜 임상 구조에서 나온 값이다.**
+**The drop in z from +4.46 to +3.18 is precisely "the part that was just arithmetic."**
+Had we kept MAP, we could not have answered a reviewer asking, "How much of this is just recovering
+`MAP=(SBP+2DBP)/3`?" **The remaining z = +3.18 comes entirely from genuine clinical structure.**
 
-질량이 90.5% → 79.2%로 준 주 원인은 `sbp–dbp`(0.439)가 held-out이면서 거리 3에
-놓여 `L=1` 도달 밖이기 때문이다. 단 이는 **평가 장치 때문에 생긴 손해**다.
-실제 배포 모델은 held-out 없이 모든 안정 간선을 쓰므로 `sbp–dbp`는 거리 1이 된다.
+The main reason mass fell from 90.5% to 79.2% is that `sbp–dbp` (0.439) is held out and sits at distance 3,
+placing it outside the `L=1` reach. But this is **a loss created by the evaluation apparatus itself**.
+The actual deployed model uses every stable edge with no hold-out, so `sbp–dbp` becomes distance 1.
 
 ---
 
-## 해석 1 — 메커니즘이 실제로 작동한다
+## Interpretation 1 — the mechanism really works
 
-임상 변수가 클러스터를 이루고, 그 클러스터가 **삼각형**을 만든다.
-그래서 강한 간선을 held-out으로 빼도 **공통 이웃을 통해 거리 2에 남는다.**
+Clinical variables form clusters, and those clusters form **triangles**.
+So even when a strong edge is held out, **it remains at distance 2 via a common neighbor.**
 
-| held-out 강한 쌍 | \|ρ\| | CDG 거리 | 공통 이웃 | 임상적 의미 |
+| Held-out strong pair | \|ρ\| | CDG distance | Common neighbor | Clinical meaning |
 |---|---|---|---|---|
-| creatinine — bun | **0.657** | **2** | potassium | 신장 |
-| sodium — chloride | **0.649** | **2** | bicarbonate | 전해질·산염기 |
+| creatinine — bun | **0.657** | **2** | potassium | Kidney |
+| sodium — chloride | **0.649** | **2** | bicarbonate | Electrolytes / acid-base |
 
-`L=1`의 도달 반경이 2이므로 **표현 가능**하다.
-무작위 순열은 이들을 거리 3~5로 흩어놓고, 따름정리 1에 의해 **표현이 원천 불가능**해진다.
+Since the reach radius at `L=1` is 2, these are **representable**.
+A random permutation scatters them out to distances 3–5, and by Corollary 1 they become **fundamentally impossible to represent**.
 
-CDG가 잡아낸 간선도 전부 진짜 생리다: chloride–bicarbonate(0.387, 음이온차),
-sodium–bicarbonate(0.294), heart_rate–resp_rate(0.255), **wbc–platelet(0.232, 골수·염증)**,
-resp_rate–spo2(0.191), bicarbonate–creatinine(0.151, 신장 산염기),
-**wbc–glucose(0.097, 스트레스 고혈당)**.
+The edges the CDG did capture are all genuine physiology as well: chloride–bicarbonate (0.387, anion gap),
+sodium–bicarbonate (0.294), heart_rate–resp_rate (0.255), **wbc–platelet (0.232, bone marrow / inflammation)**,
+resp_rate–spo2 (0.191), bicarbonate–creatinine (0.151, renal acid-base),
+**wbc–glucose (0.097, stress hyperglycemia)**.
 
-## 해석 2 — 깊이에 따른 효과 감쇠가 이론의 예측이다
+## Interpretation 2 — the attenuation of the effect with depth is what the theory predicts
 
 ```
 z = +3.18  (L=1)  ->  +0.66  (L=2)  ->  0.00  (L=3)
 ```
 
-깊이가 늘면 도달 반경 `2L`이 넓어져 **모든 쌍이 표현 가능해지고, 토폴로지가
-아무 제약도 걸지 않게 된다.** `L=3`에서는 CDG와 permuted가 문자 그대로 동일하다.
+As depth grows, the reach radius `2L` widens, so **every pair becomes representable and the topology stops
+imposing any constraint at all.** At `L=3`, the CDG and the permuted graphs are literally identical.
 
-**이 감쇠 곡선을 논문의 그림으로 쓴다.** 이론이 예측하고 데이터가 확인한 관계이며,
-"왜 얕은 회로여야 하는가"에 대한 답이다. `L=2`의 FAIL은 실패가 아니라
-**이론을 확인해주는 음성 대조군**이다.
+**We will use this attenuation curve as a figure in the paper.** It is a relationship the theory predicted and
+the data confirmed, and it is the answer to "why must the circuit be shallow?" The FAIL at `L=2` is not a
+failure but **a negative control that corroborates the theory**.
 
-## 해석 3 — 설계 확정
+## Interpretation 3 — the design is settled
 
-**`L=1` 단독.** `L=2`는 확증 실험에 쓸 수 없다 (실제 데이터에서 z=+0.66, p=0.287 FAIL).
-demo(n=81)에서는 `L=2`도 통과했으나 그 그래프는 노이즈였다.
+**`L=1` alone.** `L=2` cannot be used for the confirmatory experiment (on real data it FAILs, z=+0.66, p=0.287).
+On the demo (n=81), `L=2` did pass, but that graph was noise.
 
-이는 `RESULTS_ceiling.md` 와 정확히 맞물린다:
+This dovetails exactly with `RESULTS_ceiling.md`:
 
-- `L=1` 인접 쌍 천장 = **0.991** → 강한 임상 관계(0.66, 0.65) 표현 가능
-- `L=1` light cone 밖 = **~0.01** → 먼 쌍은 정확히 0으로 강제
-- `L=1` 정렬 효과 = **z=+3.18** → CDG가 permutation을 압도
+- `L=1` adjacent-pair ceiling = **0.991** → strong clinical relationships (0.66, 0.65) are representable
+- `L=1` outside the light cone = **~0.01** → distant pairs are forced to exactly zero
+- `L=1` alignment effect = **z=+3.18** → the CDG overwhelms the permutation
 
-**표현력·변별력·정렬효과가 동시에 성립하는 유일한 지점이 `L=1`이다.**
-하이퍼파라미터를 튜닝해 고른 것이 아니라, 이론이 지목하고 데이터가 확인한 지점이다.
+**`L=1` is the only point at which expressivity, discriminative power, and the alignment effect hold simultaneously.**
+It was not selected by tuning a hyperparameter; it is the point the theory pointed to and the data confirmed.
 
 ---
 
-## 남은 리스크
+## Remaining risks
 
-- **혈압 삼각은 해결됨.** MAP을 생성 변수에서 제외했다 (`REVISIONS.md` C-3).
-  MAP은 여전히 추출하되 임상 개연성 **평가**에만 쓴다: `MAP~ = (SBP~ + 2·DBP~)/3` 을
-  계산해 실제 MAP 분포와 비교한다.
-- 이 검정은 **표현 가능성의 상한**을 잴 뿐, 학습이 실제로 그 상한에 도달하는지는
-  묻지 않는다. WGAN-GP 학습까지 포함한 확증 실험이 여전히 필요하다
-  (`benchmark_synthetic.py`를 WP-6 최적화 후 재실행).
-- `L=1` 정렬 효과의 크기(z=+3.18)는 held-out 방식에 의존한다. `sbp–dbp`(0.439)가
-  held-out이면서 거리 3에 놓여 도달 밖이 되는 것이 질량 손실의 주 원인이다.
-  held-out 구성 seed에 대한 민감도를 확인할 것.
+- **The blood-pressure triangle is resolved.** MAP has been excluded from the generated variables (`REVISIONS.md` C-3).
+  MAP is still extracted, but it is used only for **evaluating** clinical plausibility: we compute
+  `MAP~ = (SBP~ + 2·DBP~)/3` and compare it against the real MAP distribution.
+- This test only measures **an upper bound on representability**; it does not ask whether learning actually
+  reaches that bound. A confirmatory experiment that includes WGAN-GP training is still needed
+  (re-run `benchmark_synthetic.py` after the WP-6 optimization).
+- The magnitude of the `L=1` alignment effect (z=+3.18) depends on the hold-out scheme. The main source of
+  mass loss is that `sbp–dbp` (0.439) is held out and sits at distance 3, putting it out of reach.
+  Sensitivity to the hold-out construction seed should be checked.

@@ -1,9 +1,9 @@
-"""환경 스모크 테스트 + 계획서 부록 B의 핵심 회로 검증.
+"""Environment smoke test + verification of the core circuit claims in Appendix B of the plan.
 
-검증 항목:
-  B-1. RZZ 바로 뒤에 Z 측정 -> 얽힘 gradient가 0 (RZZ가 Z와 가환)
-  B-2. RZZ 뒤에 RX/RY mixing -> gradient가 비영
-  B-3. PennyLane과 torch statevector 구현이 일치
+Checks:
+  B-1. Z measurement immediately after RZZ -> the entangling gradient is 0 (RZZ commutes with Z)
+  B-2. RX/RY mixing after RZZ -> the gradient is nonzero
+  B-3. The PennyLane and torch statevector implementations agree
 """
 
 import sys
@@ -16,12 +16,12 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 
 def scalar_grad(qnode, x):
-    """qml.grad는 tuple을 돌려줄 수 있으므로 스칼라로 정규화."""
+    """qml.grad may return a tuple, so normalize it to a scalar."""
     g = qml.grad(qnode)(qml.numpy.array(x, requires_grad=True))
     return float(np.atleast_1d(np.asarray(g, dtype=float)).ravel()[0])
 
 print("=" * 60)
-print("환경")
+print("Environment")
 print("=" * 60)
 print(f"  torch     {torch.__version__}  cuda={torch.cuda.is_available()}")
 if torch.cuda.is_available():
@@ -34,7 +34,7 @@ dev = qml.device("default.qubit", wires=2)
 
 @qml.qnode(dev, interface="autograd")
 def no_mixing(gamma):
-    """RZZ 직후 바로 Z 측정 -> gradient 0이어야 함."""
+    """Z measured immediately after RZZ -> the gradient must be 0."""
     qml.RY(0.7, wires=0)
     qml.RY(0.4, wires=1)
     qml.IsingZZ(gamma, wires=[0, 1])
@@ -43,18 +43,18 @@ def no_mixing(gamma):
 
 @qml.qnode(dev, interface="autograd")
 def with_mixing(gamma):
-    """RZZ -> local RX/RY mixing -> Z 측정 -> gradient 비영이어야 함."""
+    """RZZ -> local RX/RY mixing -> Z measurement -> the gradient must be nonzero."""
     qml.RY(0.7, wires=0)
     qml.RY(0.4, wires=1)
     qml.IsingZZ(gamma, wires=[0, 1])
-    qml.RX(0.9, wires=0)   # 비가환 local mixing
+    qml.RX(0.9, wires=0)   # non-commuting local mixing
     qml.RY(0.5, wires=0)
     return qml.expval(qml.PauliZ(0))
 
 
 print()
 print("=" * 60)
-print("부록 B-1 / B-2: RZZ gradient가 local mixing에 의존하는가")
+print("Appendix B-1 / B-2: does the RZZ gradient depend on local mixing?")
 print("=" * 60)
 
 g = 1.1
@@ -67,20 +67,20 @@ print()
 
 ok_b1 = abs(grad_no) < 1e-10
 ok_b2 = abs(grad_yes) > 1e-6
-print(f"  [B-1] mixing 없으면 gradient == 0 : {'PASS' if ok_b1 else 'FAIL'}")
-print(f"  [B-2] mixing 있으면 gradient != 0 : {'PASS' if ok_b2 else 'FAIL'}")
+print(f"  [B-1] without mixing, gradient == 0 : {'PASS' if ok_b1 else 'FAIL'}")
+print(f"  [B-2] with mixing, gradient != 0    : {'PASS' if ok_b2 else 'FAIL'}")
 print()
-print("  -> v2 설계(RZZ 뒤 비가환 local mixing 필수)의 근거가 수치로 확인됨.")
-print("     mixing을 빼면 마지막 얽힘층의 파라미터가 학습되지 않는다.")
+print("  -> The rationale for the v2 design (non-commuting local mixing after RZZ is mandatory) is confirmed numerically.")
+print("     Without the mixing, the parameters of the final entangling layer do not train.")
 
 print()
 print("=" * 60)
-print("B-3: torch statevector 구현이 PennyLane과 일치하는가")
+print("B-3: does the torch statevector implementation agree with PennyLane?")
 print("=" * 60)
 
 
 def torch_statevector(gamma: float) -> float:
-    """with_mixing과 동일한 회로를 torch로 직접 구현."""
+    """The same circuit as with_mixing, implemented directly in torch."""
     c64 = torch.complex64
 
     def ry(t):
@@ -124,10 +124,10 @@ diff = abs(pl_val - tv_val)
 print(f"  PennyLane <Z0> = {pl_val:+.9f}")
 print(f"  torch     <Z0> = {tv_val:+.9f}")
 print(f"  |diff|         = {diff:.2e}")
-print(f"  [B-3] 두 구현 일치 : {'PASS' if diff < 1e-5 else 'FAIL'}")
+print(f"  [B-3] the two implementations agree : {'PASS' if diff < 1e-5 else 'FAIL'}")
 
 print()
 print("=" * 60)
 all_ok = ok_b1 and ok_b2 and diff < 1e-5
-print("전체:", "PASS — 환경과 회로 규약이 모두 검증됨" if all_ok else "FAIL")
+print("Overall:", "PASS — environment and circuit conventions all verified" if all_ok else "FAIL")
 print("=" * 60)

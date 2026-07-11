@@ -1,26 +1,28 @@
-"""대조 그래프 생성 (CDG-QGAN v2 §7.8, §9) + 리뷰 반영 추가 대조군.
+"""Control-graph construction (CDG-QGAN v2 §7.8, §9) + extra controls added per review.
 
-확증 대조군:
-  - isomorphic permuted-CDG : adjacency만 순열, 특징-큐비트 대응은 고정 (v2 §5.3)
-  - distance-matched permuted-CDG : [리뷰 B] 아래 설명
+Confirmatory controls:
+  - isomorphic permuted-CDG : permutes the adjacency only; the feature-qubit
+    assignment stays fixed (v2 §5.3)
+  - distance-matched permuted-CDG : see [review B] below
 
-메커니즘 대조군:
+Mechanism controls:
   - degree-preserving rewired
   - ring / ring-with-chords
   - no-entanglement
 
-[리뷰 B] 왜 distance-matched permutation이 필요한가
---------------------------------------------------
-따름정리 1에 의해 d_G(u,v) > 2L 이면 조건부 공분산이 정확히 0이다.
-그런데 held-out 임상 쌍은 CDG에서 거리 2 근처(공통 이웃을 공유)에 놓이고,
-무작위 permutation에서는 거리 3~5로 흩어진다. 따라서 L=1에서
-Delta_HDE < 0 은 "실험 결과"가 아니라 그래프 조합론으로 이미 결정된 사실이다.
-= 실패할 수 없는 검정.
+[review B] Why a distance-matched permutation is necessary
+----------------------------------------------------------
+By Corollary 1, if d_G(u,v) > 2L the conditional covariance is exactly 0.
+But the held-out clinical pairs sit at roughly distance 2 in the CDG (they share a
+common neighbor), while a random permutation scatters them out to distance 3-5.
+So at L=1, Delta_HDE < 0 is not an "experimental result" — it is already fixed by
+the combinatorics of the graph. I.e. a test that cannot fail.
 
-distance-matched permutation은 held-out 쌍의 거리 분포를 CDG와 같게 맞춘다.
-그러면 "가까이 있다"는 이점이 상쇄되고, 남는 차이는 오직
-"CDG가 고른 바로 그 간선들이 실제 임상 구조를 담고 있는가"뿐이다.
-이것이 결과를 미리 알 수 없는, 정보량 있는 검정이다.
+The distance-matched permutation forces the distance distribution of the held-out
+pairs to be the same as in the CDG. That cancels out the "being close" advantage,
+and the only difference left is whether the exact edges the CDG picked really carry
+the clinical structure. That is an informative test whose outcome is not known in
+advance.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ import networkx as nx
 
 
 def _dist_profile(G: nx.Graph, pairs: list[tuple[int, int]]) -> tuple[int, ...]:
-    """주어진 쌍들의 그래프 거리 분포 (정렬된 튜플)."""
+    """Graph-distance distribution of the given pairs (as a sorted tuple)."""
     out = []
     for u, v in pairs:
         out.append(nx.shortest_path_length(G, u, v) if nx.has_path(G, u, v) else 99)
@@ -38,11 +40,12 @@ def _dist_profile(G: nx.Graph, pairs: list[tuple[int, int]]) -> tuple[int, ...]:
 
 
 def isomorphic_permuted(G: nx.Graph, rng: np.random.Generator) -> nx.Graph:
-    """adjacency만 순열 (v2 §5.3).
+    """Permute the adjacency only (v2 §5.3).
 
-    노드 수, 간선 수, 차수열, 지름, isomorphism class, 게이트 수, 파라미터 수를
-    전부 보존한다. 달라지는 것은 "어떤 임상 특징 쌍이 가까운가"뿐.
-    큐비트 u는 계속 특징 x_u를 생성한다 (특징-큐비트 대응은 고정).
+    Preserves the node count, edge count, degree sequence, diameter, isomorphism
+    class, gate count and parameter count. The only thing that changes is which
+    pairs of clinical features are close to each other.
+    Qubit u still generates feature x_u (the feature-qubit assignment is fixed).
     """
     n = G.number_of_nodes()
     perm = rng.permutation(n)
@@ -58,9 +61,10 @@ def distance_matched_permuted(
     rng: np.random.Generator,
     n_tries: int = 20000,
 ) -> tuple[nx.Graph, bool]:
-    """[리뷰 B] held-out 쌍의 거리 분포가 CDG와 같은 permutation을 찾는다.
+    """[review B] Find a permutation whose held-out pair distance distribution matches the CDG.
 
-    반환: (그래프, 정확히 매칭됐는지). 정확 매칭이 없으면 가장 가까운 것.
+    Returns: (graph, whether the match was exact). If no exact match is found, the
+    closest one.
     """
     target = _dist_profile(G, holdout)
     best, best_cost = None, np.inf
@@ -78,18 +82,18 @@ def distance_matched_permuted(
 
 
 def degree_preserving_rewire(G: nx.Graph, rng: np.random.Generator, n_swaps: int = 200) -> nx.Graph:
-    """double-edge swap. 차수열과 간선 수는 유지, 경로 구조는 바꿈 (v2 §7.8)."""
+    """double-edge swap. Keeps the degree sequence and edge count, changes the path structure (v2 §7.8)."""
     H = G.copy()
     seed = int(rng.integers(0, 2**31 - 1))
     try:
         nx.double_edge_swap(H, nswap=n_swaps, max_tries=n_swaps * 50, seed=seed)
     except nx.NetworkXAlgorithmError:
-        pass  # 스왑 가능한 조합이 부족하면 가능한 만큼만
+        pass  # if there are too few swappable combinations, take as many as possible
     return H
 
 
 def ring_with_chords(n: int, n_edges: int, rng: np.random.Generator) -> nx.Graph:
-    """자원(간선 수)을 맞춘 균일 토폴로지 기준선 (v2 §9.2)."""
+    """Uniform-topology baseline with the resources (edge count) matched (v2 §9.2)."""
     H = nx.cycle_graph(n)
     extra = n_edges - H.number_of_edges()
     if extra > 0:
@@ -100,26 +104,26 @@ def ring_with_chords(n: int, n_edges: int, rng: np.random.Generator) -> nx.Graph
 
 
 def no_entanglement(n: int) -> nx.Graph:
-    """E = 공집합. local marginal만 생성하는 양자 모델 (v2 §7.8)."""
+    """E = empty set. A quantum model that generates only local marginals (v2 §7.8)."""
     H = nx.Graph()
     H.add_nodes_from(range(n))
     return H
 
 
 def summarize(name: str, G: nx.Graph, holdout: list[tuple[int, int]], L_list=(1, 2)) -> str:
-    """대조군이 자원을 정말 보존하는지 + held-out 쌍이 도달 가능한지 확인."""
+    """Check that a control really preserves the resources + whether the held-out pairs are reachable."""
     deg = dict(G.degree())
     prof = _dist_profile(G, holdout) if G.number_of_edges() else tuple([99] * len(holdout))
     arr = np.array(prof)
     reach = "  ".join(f"L={L}:{int((arr <= 2*L).sum())}/{len(arr)}" for L in L_list)
     conn = nx.is_connected(G) if G.number_of_edges() else False
     return (f"  {name:<26} |E|={G.number_of_edges():>2}  maxdeg={max(deg.values()) if deg else 0}  "
-            f"connected={str(conn):<5}  held-out 도달 {reach}")
+            f"connected={str(conn):<5}  held-out reach {reach}")
 
 
 def build_all(G_cdg: nx.Graph, holdout: list[tuple[int, int]], seed: int = 20260711,
               n_perms: int = 3) -> dict[str, nx.Graph]:
-    """확증/메커니즘 대조군 일괄 생성."""
+    """Build all confirmatory / mechanism controls at once."""
     rng = np.random.default_rng(seed)
     n, m = G_cdg.number_of_nodes(), G_cdg.number_of_edges()
 
@@ -130,7 +134,7 @@ def build_all(G_cdg: nx.Graph, holdout: list[tuple[int, int]], seed: int = 20260
         H, exact = distance_matched_permuted(G_cdg, holdout, rng)
         out[f"distmatched_{k}"] = H
         if not exact:
-            print(f"  [경고] distance-matched permutation {k}: 정확 매칭 실패, 최근접 사용")
+            print(f"  [warning] distance-matched permutation {k}: no exact match, using the closest one")
     out["rewired"] = degree_preserving_rewire(G_cdg, rng)
     out["ring"] = ring_with_chords(n, m, rng)
     out["no_entangle"] = no_entanglement(n)
@@ -152,13 +156,14 @@ if __name__ == "__main__":
     G.add_edges_from(E_fit)
 
     print("=" * 78)
-    print("대조 그래프  (자원은 동일, 임상 정렬만 파괴)")
+    print("Control graphs  (same resources, only the clinical alignment is destroyed)")
     print("=" * 78)
     graphs = build_all(G, holdout)
     print()
     for k, H in graphs.items():
         print(summarize(k, H, holdout))
     print()
-    print("  핵심: permuted는 held-out 도달 수가 CDG보다 작아야 하고,")
-    print("        distmatched는 CDG와 같아야 한다. 같은데도 CDG가 이기면")
-    print("        그건 거리 배치가 아니라 임상 구조 때문이다. [리뷰 B]")
+    print("  Key point: permuted must reach fewer held-out pairs than the CDG, while")
+    print("             distmatched must reach the same number. If the CDG still wins")
+    print("             at parity, that is the clinical structure, not the distance")
+    print("             layout. [review B]")
