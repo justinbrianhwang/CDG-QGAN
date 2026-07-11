@@ -250,7 +250,30 @@ alone causes sign vectors of different sizes to collide. The key must be `(n, u,
 
 ---
 
-## E. **[OPEN · TOP PRIORITY]** WGAN-GP fails to train the entangling angles
+## E. **[RESOLVED 2026-07-11]** WGAN-GP could not train the entangling angles — the critic was blind to dependency
+
+> **Resolution.** The critic was spending its capacity on the marginals, which the ~2000 classical
+> head parameters can already fit unaided, so it handed the entangling angles nothing but noise —
+> so nothing learned any dependency — so every topology scored identically and the confirmatory
+> contrast measured nothing. **Rank-transforming the critic's input within the batch destroys all
+> marginal information and leaves the gradient nowhere to go but `gamma`.** With that fix, plus
+> the c-conditional metric the CDG is actually *defined* by (E-3), the trained model recovers the
+> alignment effect:
+>
+> | model | 120 pairs (conditional) | 19 true edges |
+> |---|---|---|
+> | **aligned (true CDG)** | **0.0426 ± 0.0043** | **0.1627** |
+> | no_entangle | 0.0647 | 0.3644 |
+> | *floor* | *0.0653* | *0.3641* |
+> | distmatched | 0.0729 | 0.3352 |
+> | rewired | 0.0749 | 0.3521 |
+> | permuted | 0.0787 | 0.3600 |
+>
+> **WP-2 is unblocked.** Full account: `RESULTS_confirm.md` and §E-7 below. The rest of section E
+> is kept as the diagnostic record — it is how we got here, and E-2 is the reason we did not
+> conclude the hypothesis was false.
+
+## E (record). WGAN-GP fails to train the entangling angles
 
 Evidence: `scripts/benchmark_synthetic.py`, `scripts/diag_benchmark.py`, `scripts/diag_trained.py`
 · controlled synthetic teacher (16 nodes, 19 edges; the true graph is known from the outset)
@@ -454,6 +477,93 @@ structure at all" is itself a real result about tabular GANs.
 failure mode observed (the generator fits marginals and ignores the joint). If (A) fails, (C) is
 the honest fallback and it is already fully evidenced — but it costs the application, so it should
 not be chosen before (A) has been tried.
+
+### E-7. [RESOLVED] The fix: make the critic blind to the marginals
+
+Evidence: `scripts/diag_fix.py`, `scripts/diag_fix2.py`, `scripts/confirm.py` ·
+`RESULTS_confirm.md`
+
+Five candidate fixes were tried. **Four failed, and all four are recorded here** — the true-edge
+error is the sharpest read, because the floor is 0.3676 and the same circuit reaches ~0 under
+direct optimization.
+
+| what was tried | aligned true-edge error | verdict |
+|---|---|---|
+| *floor — a model that creates zero dependency* | *0.3676* | — |
+| baseline WGAN-GP | 0.4029 | worse than doing nothing |
+| quantum learning rate, swept 1000× | 0.3589 | **failed** (§E-6) |
+| (D) bigger critic batch (1024) | 0.3609 | **failed** |
+| (A) batch-aware critic alone | 0.3488 | **failed** |
+| (B) dependency term on a FIT split | 0.4024 | **failed** |
+| **(E) copula critic** | **0.2663** | **works** |
+| **(E) + (A)** | **0.1892** | **works, and best** |
+
+**(E) — the copula critic.** Rank-transform each feature *within the batch* before the critic
+sees it: a differentiable soft rank, then the inverse normal CDF. Every input feature is then
+standard normal **by construction**, so the marginals carry *no information at all*, and the only
+thing left for the critic to discriminate on is the copula — the dependency structure. The
+gradient has nowhere to go but the entangling angles.
+
+This is not an ad-hoc trick. It is the *same* monotone-invariance argument that already justifies
+computing the **metric** in nonparanormal space (A-4), applied to the critic instead of to the
+metric. And it computes no correlation, no partial correlation, nothing the evaluation does — it
+is an input transform. **v2 §8.10 survives intact, and the exception we thought we would have to
+carve out is not needed.**
+
+**(A) — minibatch discrimination** (Salimans et al., 2016) on top. A per-sample critic cannot
+estimate a 16-dimensional joint from single rows; this lets it compare a *batch's* structure
+against a real batch's. On its own it does nothing (0.3488, still the floor). On top of (E) it
+nearly doubles the effect (0.2663 → 0.1892).
+
+The causal chain reads cleanly in that table: **if the left column does not break the floor, the
+topologies never separate.** A model that learns no dependency cannot express a preference among
+topologies — expressivity that is never used is invisible. (E) opened the learning; the alignment
+effect appeared immediately; (A) amplified it.
+
+#### Two more things had to be fixed for the experiment to mean anything
+
+**The metric (E-3).** The CDG is *defined* as a partial correlation conditional on `c`, and the
+metric was measuring the unconditional one. `eval_dep.partial_corr_c` is now the estimator the
+CDG is defined by: nonparanormal → residualize on a **nonlinear** basis of `c` (it enters the
+circuit through angles, so linear residualization left half the false positives behind) → partial
+correlation. This defect was live in the real MIMIC pipeline, not only in the benchmark.
+
+**The teacher.** `benchmark_synthetic.teacher_data` drew `c` **independently of `X`**. MIMIC does
+not look like that — mortality, age, sex and ICU type plainly shift vitals and labs — and the
+independence made the estimator mismatch invisible in the benchmark while it was live in the real
+pipeline. `teacher_data_cond` has `c` shift every feature's mean, with the graph fixing the
+dependency structure *conditional on* `c`.
+
+#### The result, and a result we did not predict
+
+`aligned − distmatched = −0.0303` against a per-variant SD of ~0.004. distmatched is the control
+that matters: it matches the CDG's held-out pair distance profile, so "the strong pairs happen to
+be nearby" is no longer an advantage the CDG uniquely holds. It still loses.
+
+And: **`no_entangle` (0.0647) beats permuted (0.0787), rewired (0.0749) and distmatched
+(0.0729) — all three of which are worse than the floor.** A misaligned circuit cannot learn the
+dependencies that exist (true-edge error stays at the floor) but *does* manufacture ones that do
+not (non-edge error 0.023–0.026 vs the floor's 0.0090). The entangling gates are not a free prior
+that helps a little wherever you put them. They are a **commitment** that these particular pairs
+are dependent — and asserting it about the wrong pairs leaves you strictly worse off than never
+having asserted it. That is a sharper claim than "alignment helps".
+
+#### The methodological lesson, which outlives this paper
+
+A tabular GAN whose decoder can fit the marginals will let the critic settle for the marginals,
+and then **nothing learns the dependency structure** — for any architecture, any topology, any
+hyperparameter. In that regime every structural hypothesis looks equally false, because every
+model is equally empty. We nearly concluded the CDG hypothesis was wrong on exactly that basis.
+
+The tell was cheap and we should have looked for it sooner: **score a model that creates no
+dependency at all.** Ours beat the model we had trained by 2.1×.
+
+#### Housekeeping
+
+`diag_fix.py` was stopped after its (B)/aligned row. (B) had already failed there (0.4024, worse
+than the floor), and its remaining rows were (B)/permuted and (A)+(B) — variants of two approaches
+that had each already failed on their own. The GPU went to `confirm.py` instead. Recording this
+because silently dropping runs is how "we only report what worked" happens.
 
 ### E-5. A bug caught along the way: `no_entangle` falls back to the full statevector
 

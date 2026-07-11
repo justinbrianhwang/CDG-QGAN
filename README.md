@@ -59,7 +59,49 @@ discriminative power hold simultaneously. See `REVISIONS.md` A-1 for the full ar
 
 ## Results
 
-### Alignment carries real information — the CDG beats every control
+### A trained model recovers the alignment effect
+
+This is the headline. Every variant gets the **same 19-edge entanglement budget, the same
+critic, the same optimizer, the same objective**. The only difference is which clinical pair
+sits under which RZZ gate. The model is trained adversarially with **pure WGAN-GP** — no
+dependency term, nothing borrowed from the evaluation metric.
+
+![confirmatory experiment](figures/fig_confirm.png)
+
+| Model | \|E\| | 120 pairs (conditional) | 19 true edges |
+|---|---|---|---|
+| **aligned (true CDG)** | 19 | **0.0426 ± 0.0043** | **0.1627** |
+| no_entangle (RZZ removed) | 0 | 0.0647 ± 0.0003 | 0.3644 |
+| *floor — creates zero dependency* | — | *0.0653* | *0.3641* |
+| distmatched | 19 | 0.0729 ± 0.0020 | 0.3352 |
+| rewired | 19 | 0.0749 ± 0.0051 | 0.3521 |
+| permuted (isomorphic) | 19 | 0.0787 ± 0.0040 | 0.3600 |
+
+`aligned − distmatched = −0.0303` against a per-variant SD of ~0.004 — and `distmatched` is the
+control that matters, because it matches the CDG's held-out pair distance profile, so "the
+strong pairs happen to be nearby" is no longer an advantage the CDG uniquely holds. It still
+loses.
+
+Read the right-hand column. **Only the aligned circuit learns the true dependencies at all.**
+Every control sits at the floor (0.335–0.364 against 0.3641) — not because it was trained less,
+but because Corollary 1 *forbids* it: its strong pairs were scattered beyond `2L`, where the
+conditional covariance is exactly zero at every parameter setting.
+
+And two results we did not predict:
+
+- **`no_entangle` lands exactly on the floor** (0.0647 vs 0.0653, SD 0.0003). Strip the RZZ
+  gates and the model creates no dependency whatsoever. Everything aligned achieves, it achieves
+  through the entangling angles — nothing else in the model can.
+- **Misplaced entanglement is worse than none.** `no_entangle` beats permuted, rewired *and*
+  distmatched, all of which score worse than the floor. A misaligned circuit still cannot learn
+  the dependencies that exist, but it does manufacture ones that do not. The entangling gates are
+  not a free prior; they are a **commitment** that these particular pairs are dependent. Assert it
+  about the wrong pairs and you are strictly worse off than never having asserted it.
+
+Details, and the three things that had to be fixed before this experiment could mean anything:
+`RESULTS_confirm.md`.
+
+### The same conclusion at the representational level
 
 The whole claim rests on one contrast. Take the CDG, and relabel it: keep every node, every
 edge, the degree sequence, and the triangles, and change **only which clinical variable sits
@@ -86,40 +128,56 @@ not from graph combinatorics.** Details: `RESULTS_ceiling_joint.md`.
 
 | | Result | Document |
 |---|---|---|
+| **Trained model, CDG vs. every control** | **aligned 0.0426 vs. distmatched 0.0729 (floor 0.0653)** | **`RESULTS_confirm.md`** |
 | The light-cone cliff appears exactly at `d = 2L` | outside it, max \|ρ\| = 0.012 | `RESULTS_ceiling.md` |
 | Adjacent-pair expressivity ceiling (`L=1`) | \|ρ\| = 0.991 | `RESULTS_ceiling.md` |
 | Alignment precheck `M(G,L)` on the real CDG | `L=1`: z = +3.18 (p = 0.0004) · `L=2`: z = +0.66 (rejected) | `RESULTS_precheck.md` |
 | Joint 120-pair ceiling, CDG vs. controls | aligned 0.0103 vs. permuted 0.0468 (floor 0.0609) | `RESULTS_ceiling_joint.md` |
 | Light-cone simulator optimization | ~70× speedup (>1800 s → 25.7 s / seed) | `WP6_REPORT.md` |
 
-## Unresolved — current top priority
+## The finding that nearly killed this project
 
-**WGAN-GP does not train the entangling angles at all.** The circuit demonstrably *can*
-represent the target pattern (above), but adversarial training finds none of it.
+For a while, the confirmatory experiment returned nothing at all. Every graph variant scored the
+same, and the model with **no entanglement whatsoever** was the best of them. Read naively, that
+says the CDG hypothesis is false.
 
-| | 120 pairs | 19 true edges | 101 non-edges |
-|---|---|---|---|
-| a model that creates **no dependency at all** | 0.0648 | 0.3676 | 0.0078 |
-| **direct optimization** (aligned) | **0.0103** | — | — |
-| **WGAN-GP** (aligned) | 0.1359 | **0.3662** | 0.0926 |
-| WGAN-GP (permuted) | 0.1346 | 0.3707 | 0.0902 |
+It was not. **The critic was blind to dependency, so nothing was learning any.** And when
+nothing learns dependency, every structural hypothesis you might want to test looks equally
+false, because every model is equally empty.
 
-Three things are wrong at once, and they compound:
+The tell was cheap, and we should have looked for it sooner: **compute the score of a model that
+creates no dependency at all.** Ours was 2.1× *better* than the model we had trained (0.0648 vs
+0.1359). A trained model losing to a do-nothing baseline is not a weak result — it is a broken
+pipeline.
 
-1. **The trained model is 2× worse than doing nothing.** A model that generates zero
-   dependency scores 0.0648; WGAN-GP scores 0.1359.
-2. **The entangling gates contribute nothing.** The true-edge error (0.3662) equals the floor
-   (0.3676). The model stays 13× away from a solution it can demonstrably reach.
-3. **It manufactures dependency that does not exist.** 0.0926 of spurious partial correlation
-   on the 101 non-edges — and a model with *zero* entangling gates manufactures 0.0859 of it
-   too. So the culprit is not the entanglement but **the condition vector `c` that every
-   feature shares**, which the metric fails to control for. The CDG is *defined* conditionally
-   on `c` while the metric measures an *unconditional* partial correlation — an estimator
-   mismatch that is present in the real MIMIC pipeline too, not just the benchmark.
+What was actually wrong:
 
-Consequence: the four graph variants all collapse onto ~0.135 and the confirmatory contrast
-measures nothing. **Running the 90-run confirmatory experiment in this state would be
-wasted.** See `REVISIONS.md` §E for the full diagnosis and the fix list.
+1. **The critic spent its capacity on the marginals** — which the ~2000 classical head
+   parameters can already fit unaided — and handed the entangling angles nothing but noise.
+   Sweeping the quantum learning rate over 1000× did not help; at `lr_q = 5e-2` the angles move
+   2.0 radians and *still* learn nothing (`RESULTS_lr.md`). Neither did a bigger batch, nor a
+   batch-aware critic on its own, nor a dependency term in the loss. All of those are recorded.
+
+   The fix: **rank-transform each feature within the batch before the critic sees it.** Every
+   input is then standard normal by construction, the marginals carry no information, and the
+   only thing left to discriminate on is the copula. The gradient has nowhere to go but the
+   entangling angles. True-edge error: 0.4029 → 0.2663, and → 0.1892 once minibatch
+   discrimination is added on top.
+
+2. **The metric was the wrong estimator.** The CDG is *defined* as a partial correlation
+   conditional on `c`, but the metric measured the unconditional one — so everything `c` induced
+   was scored as a false positive on every pair. This was live in the real MIMIC pipeline, not
+   just the benchmark.
+
+3. **The benchmark's teacher drew `c` independently of `X`**, which is not what MIMIC looks like
+   and which hid (2) from view.
+
+The loss is still pure WGAN-GP. No dependency term, nothing borrowed from the evaluation
+metric — the fixes are architectural, and the anti-circularity rule survives intact.
+
+**The general lesson outlives this paper.** A tabular GAN whose decoder can fit the marginals
+will let the critic settle for the marginals, and then nothing learns the dependency structure —
+for any architecture, any topology, any hyperparameter. Always score the do-nothing model first.
 
 ## Data
 

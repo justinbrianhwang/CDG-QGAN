@@ -168,8 +168,74 @@ def fig_joint_ceiling() -> None:
     save(fig, "fig_joint_ceiling")
 
 
+# ---------------------------------------------------------------------------
+# Figure D — the confirmatory experiment.   Source: RESULTS_confirm.md
+# A model TRAINED adversarially (pure WGAN-GP, copula + batch-aware critic), scored with the
+# c-conditional metric the CDG is defined by. Lower is better.
+# ---------------------------------------------------------------------------
+CONFIRM = {                       # name: (120-pair error, sd, true-edge error)
+    "aligned\n(true CDG)":        (0.0426, 0.0043, 0.1627),
+    "no_entangle\n(RZZ removed)": (0.0647, 0.0003, 0.3644),
+    "distmatched":                (0.0729, 0.0020, 0.3352),
+    "rewired":                    (0.0749, 0.0051, 0.3521),
+    "permuted\n(isomorphic)":     (0.0787, 0.0040, 0.3600),
+}
+CONFIRM_FLOOR = 0.0653
+CONFIRM_FLOOR_EDGE = 0.3641
+
+
+def fig_confirm() -> None:
+    names = list(CONFIRM)
+    v = np.array([CONFIRM[n][0] for n in names])
+    sd = np.array([CONFIRM[n][1] for n in names])
+    edge = np.array([CONFIRM[n][2] for n in names])
+    colors = [GREEN if "aligned" in n else (GRAY if "no_entangle" in n else BLUE)
+              for n in names]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12.4, 4.6))
+    y = np.arange(len(names))[::-1]
+
+    ax = axes[0]
+    ax.barh(y, v, xerr=sd, color=colors, height=0.62, zorder=3,
+            error_kw=dict(ecolor="#555555", lw=1.2, capsize=3))
+    ax.axvline(CONFIRM_FLOOR, color=RED, ls="--", lw=1.4, zorder=4)
+    ax.text(CONFIRM_FLOOR + 0.0013, y.min() - 0.62, f"floor = {CONFIRM_FLOOR:.4f}\n"
+            "a model that creates\nno dependency at all",
+            color=RED, fontsize=8.5, va="top", linespacing=1.4)
+    for yy, x in zip(y, v):
+        ax.text(x + 0.0035, yy, f"{x:.4f}", va="center", fontsize=9)
+    ax.set_yticks(y)
+    ax.set_yticklabels(names)
+    ax.set_xlim(0, 0.105)
+    ax.set_ylim(y.min() - 1.9, y.max() + 0.6)
+    ax.set_xlabel("conditional dependency error, all 120 pairs")
+    ax.set_title("Trained model (pure WGAN-GP)", fontsize=11.5, pad=10)
+
+    ax = axes[1]
+    ax.barh(y, edge, color=colors, height=0.62, zorder=3)
+    ax.axvline(CONFIRM_FLOOR_EDGE, color=RED, ls="--", lw=1.4, zorder=4)
+    ax.text(CONFIRM_FLOOR_EDGE - 0.008, y.min() - 0.62,
+            f"floor = {CONFIRM_FLOOR_EDGE:.4f}\nlearns nothing on\nthe true edges",
+            color=RED, fontsize=8.5, va="top", ha="right", linespacing=1.4)
+    for yy, x in zip(y, edge):
+        ax.text(x + 0.012, yy, f"{x:.4f}", va="center", fontsize=9)
+    ax.set_yticks(y)
+    ax.set_yticklabels([])
+    ax.set_xlim(0, 0.50)
+    ax.set_ylim(y.min() - 1.9, y.max() + 0.6)
+    ax.set_xlabel("error on the 19 true edges")
+    ax.set_title("Only the aligned circuit learns the true dependencies",
+                 fontsize=11.5, pad=10)
+
+    fig.suptitle("Same 19-edge budget · same critic · same training. Only the placement differs.",
+                 fontsize=12.5, fontweight="bold", y=1.02)
+    fig.subplots_adjust(wspace=0.06, bottom=0.28)
+    save(fig, "fig_confirm")
+
+
 if __name__ == "__main__":
     print("Writing figures to", OUT)
     fig_lightcone_cliff()
     fig_alignment_decay()
     fig_joint_ceiling()
+    fig_confirm()
