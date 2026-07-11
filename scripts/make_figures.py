@@ -90,10 +90,10 @@ def fig_lightcone_cliff() -> None:
 # ---------------------------------------------------------------------------
 def fig_alignment_decay() -> None:
     L = np.array([1, 2, 3])
-    z = np.array([3.18, 0.66, 0.00])
-    reach = ["57 / 120", "115 / 120", "120 / 120"]
-    verdict = ["PASS", "FAIL", "meaningless"]
-    pval = ["p = 0.0004", "p = 0.287", "CDG $\\equiv$ permuted"]
+    z = np.array([3.79, 1.41, 0.00])
+    reach = ["48 / 120", "103 / 120", "120 / 120"]
+    verdict = ["PASS", "weak", "meaningless"]
+    pval = ["p < 0.0001 · 100th pct", "p = 0.038 · 86% reachable", "CDG $\\equiv$ permuted"]
     colors = [GREEN, ORANGE, RED]
 
     fig, ax = plt.subplots(figsize=(7.4, 4.4))

@@ -3,11 +3,17 @@
 Script: `scripts/precheck_alignment.py` · Run: 2026-07-11
 Data: MIMIC-IV v3.1, 24-hour landmark cohort, **n = 48,561** (complete observations on all 16 features)
 
-> **Caution — the values below are the honest ones, obtained after removing MAP.**
-> An initial run that included MAP gave `L=1` z = **+4.46**, but MAP is an arithmetic identity
-> (`MAP≈(SBP+2DBP)/3`, R²=0.860) and it was even inducing a **spurious negative correlation** between SBP and DBP.
-> Once MAP was excluded from the generated variables, z dropped to **+3.18**. **That difference is precisely "the part that was just arithmetic."**
-> For the detailed rationale, see `REVISIONS.md` C-3 and `scripts/diag_collinearity.py`.
+> **These are the current numbers. Two earlier versions are superseded — do not quote them.**
+>
+> | run | `L=1` z | why it is superseded |
+> |---|---|---|
+> | with MAP | +4.46 | MAP is an arithmetic identity (`MAP≈(SBP+2DBP)/3`, R²=0.860) and induced a *spurious negative* SBP–DBP correlation. The extra margin was arithmetic, not clinical structure. `REVISIONS.md` C-3 |
+> | linear residualization in raw units | +3.18 | The graph was estimated in a different space from the metric that scores it. `REVISIONS.md` A-4, E-3 |
+> | **current** | **+3.79** | nonparanormal → residualize on a nonlinear basis of `c` → partial correlation. The same estimator `eval_dep.partial_corr_c` applies to the synthetic data. |
+>
+> Correcting the estimator changed the graph very little (ρ-matrix correlation **0.9971**, 20 of 23
+> edges retained) and made the effect **stronger**. The conclusion is not sensitive to this choice —
+> which is itself worth knowing.
 
 ---
 
@@ -34,29 +40,40 @@ confirmatory experiment has any chance of succeeding.
 
 ## Results
 
-CDG: 16 nodes · 23 edges · maximum degree 3 · diameter 5 · total dependency mass Σ|ρ| = 6.10
+CDG: 16 nodes · 21 edges · maximum degree 3 · diameter 6 · total dependency mass Σ|ρ| = 5.96
 
 | L | Reach radius | Reachable pairs | CDG mass | Permutation null | z | p | Verdict |
 |---|---|---|---|---|---|---|---|
-| **1** | 2 | 57/120 | **4.83 (79.2%)** | 2.89 ± 0.61<br>[1.05, 5.03] | **+3.18** | **0.0004** | **PASS** |
-| 2 | 4 | 115/120 | 6.00 (98.3%) | 5.84 ± 0.23 | +0.66 | 0.287 | **FAIL** |
-| 3 | 6 | **120/120** | 6.10 (100%) | 6.10 ± 0.00 | 0.00 | 1.000 | Meaningless |
+| **1** | 2 | 48/120 | **4.645 (78.0%)** | 2.387 ± 0.595<br>[0.883, 4.380] | **+3.79** | **<0.0001** | **PASS** |
+| 2 | 4 | 103/120 | 5.696 (95.6%) | 5.113 ± 0.413 | +1.41 | 0.038 | weak |
+| 3 | 6 | **120/120** | 5.957 (100%) | 5.957 ± 0.000 | 0.00 | 1.000 | Meaningless |
 
-**At `L=1`, only 2 out of 5,000 permutations beat the CDG** (p = 0.0004).
+**At `L=1` not one of the 5,000 permutations beat the CDG** — the null's maximum (4.380) falls
+below the CDG (4.645). 100th percentile.
 
-Dependency mass falling within reach: **CDG 79.2% vs. random permutation 47.4%.**
+Dependency mass falling within reach: **CDG 78.0% vs. random permutation 40.1%.**
+
+### `L=2` — a correction to what we previously claimed
+
+An earlier version of this document said `L=2` **FAILS** on the real data (z=+0.66, p=0.287).
+Under the corrected estimator it **marginally passes** (z=+1.41, p=0.038). That claim was too
+strong and is withdrawn.
+
+`L=1` remains the operating point, but for the honest reason rather than the convenient one: at
+`L=2`, **103 of 120 pairs are already reachable (86%)**, so the topology forbids almost nothing,
+and the effect size collapses by 63%. A topology that constrains nothing cannot discriminate
+between topologies. That is an argument about *discriminative power*, not about failure.
 
 ### The cost and the benefit of removing MAP
 
 | | With MAP (contaminated) | **Without MAP (honest)** |
 |---|---|---|
-| CDG mass | 5.55 (90.5%) | 4.83 (79.2%) |
-| z | +4.46 | **+3.18** |
-| p | <0.0001 | **0.0004** |
+| CDG mass | 5.55 (90.5%) | 4.645 (78.0%) |
+| z | +4.46 | **+3.79** |
 
-**The drop in z from +4.46 to +3.18 is precisely "the part that was just arithmetic."**
+**The drop in z from +4.46 is precisely "the part that was just arithmetic."**
 Had we kept MAP, we could not have answered a reviewer asking, "How much of this is just recovering
-`MAP=(SBP+2DBP)/3`?" **The remaining z = +3.18 comes entirely from genuine clinical structure.**
+`MAP=(SBP+2DBP)/3`?" **What remains comes entirely from genuine clinical structure.**
 
 The main reason mass fell from 90.5% to 79.2% is that `sbp–dbp` (0.439) is held out and sits at distance 3,
 placing it outside the `L=1` reach. But this is **a loss created by the evaluation apparatus itself**.

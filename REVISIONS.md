@@ -17,31 +17,45 @@ permutations are isomorphic, the node count, edge count, degree sequence, triang
 clustering coefficient are all preserved; the only thing that changes is **which clinical pair
 sits inside which triangle**.
 
-These are the **post-MAP-removal** numbers (see C-3). An earlier run that still contained MAP
-gave `L=1` z=+4.46; that extra margin was the arithmetic identity `MAP≈(SBP+2DBP)/3`, not
-clinical structure. Authoritative source: `RESULTS_precheck.md`.
+These are the **current** numbers: post-MAP-removal (C-3), and estimated in the space
+`eval_dep.partial_corr_c` defines (nonparanormal → residualize on a nonlinear basis of `c` →
+partial correlation). Two earlier versions are superseded and neither should be quoted:
 
-CDG: 16 nodes · 23 edges · maximum degree 3 · diameter 5 · total dependency mass Σ|ρ| = 6.10
+- An early run still containing MAP gave `L=1` z=+4.46. That extra margin was the arithmetic
+  identity `MAP≈(SBP+2DBP)/3`, not clinical structure.
+- A run that residualized **in raw units and then applied the nonparanormal transform** gave
+  z=+3.18 on a 23-edge graph. That estimator disagreed with the one the evaluation uses, so the
+  graph we drew and the quantity we measured were not the same object [A-4, E-3]. Fixing it
+  changed the graph very little (ρ-matrix correlation 0.9971, 20 of 23 edges retained) and made
+  the effect **stronger**.
+
+CDG: 16 nodes · 21 edges · maximum degree 3 · diameter 6 · total dependency mass Σ|ρ| = 5.96
 
 | L | Reach radius | Reachable pairs | CDG mass | Permutation null | z | p | Verdict |
 |---|---|---|---|---|---|---|---|
-| **1** | 2 | 57/120 | **4.83 (79.2%)** | 2.89 ± 0.61 [1.05, 5.03] | **+3.18** | **0.0004** | **PASS** |
-| 2 | 4 | 115/120 | 6.00 (98.3%) | 5.84 ± 0.23 | +0.66 | 0.287 | **FAIL** |
-| 3 | 6 | **120/120** | 6.10 (100%) | 6.10 ± 0.00 | 0.00 | 1.000 | **meaningless** |
+| **1** | 2 | 48/120 | **4.645 (78.0%)** | 2.387 ± 0.595 [0.883, 4.380] | **+3.79** | **<0.0001** | **PASS** |
+| 2 | 4 | 103/120 | 5.696 (95.6%) | 5.113 ± 0.413 | +1.41 | 0.038 | weak |
+| 3 | 6 | **120/120** | 5.957 (100%) | 5.957 ± 0.000 | 0.00 | 1.000 | **meaningless** |
 
-**At `L=1`, only 2 of the 5,000 permutations beat the CDG** (p = 0.0004). Within its reachable
-range the CDG captures **79.2%** of the total dependency mass; a random permutation captures 47.4%.
+**At `L=1` not one of the 5,000 permutations beat the CDG** (100th percentile, null max 4.380 <
+CDG 4.645). Within its reachable range the CDG captures **78.0%** of the total dependency mass.
 
-**`L=2` FAILS on the real data.** It passed on the demo (n=81), but that graph was noise.
-`L=1` is therefore not the "primary" setting — it is **the only viable setting**.
+**On `L=2`, a correction to what this document previously claimed.** It used to say `L=2` *FAILS*
+on the real data (z=+0.66, p=0.287). Under the corrected estimator `L=2` **marginally passes**
+(z=+1.41, p=0.038). That earlier statement was too strong and is withdrawn.
+
+`L=1` is still the operating point, but for the right reason rather than a convenient one: at
+`L=2`, **103 of 120 pairs are already reachable (86%)**, so the topology barely constrains
+anything, and the effect size collapses by 63% (z: +3.79 → +1.41). A topology that forbids almost
+nothing cannot discriminate between topologies. "Weak" and "fails" are different claims, and only
+the first one is ours.
 
 > v2 §8.11 table: `logical CDG block depth L∈{1,2}, L=3 exploratory`
-> → **`L=1` only. `L=2` is not for confirmation; it is used solely as the negative control
-> described below. Delete `L=3`.**
+> → **`L=1` only for the confirmatory experiment. `L=2` is the negative control. Delete `L=3`.**
 
 #### This is not a limitation but a result — the decay of the effect with depth is what the theory predicts
 
-The alignment effect vanishes with depth: `z = +3.18 → +0.66 → 0.00`.
+The alignment effect decays with depth: `z = +3.79 → +1.41 → 0.00`.
 This is **exactly what the light-cone theory predicts**: as depth grows, the reach radius `2L`
 widens, every pair becomes representable, and the topology stops imposing any constraint at all.
 

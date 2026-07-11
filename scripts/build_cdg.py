@@ -1,21 +1,31 @@
 """Clinical Dependency Graph estimation (CDG-QGAN v2 §7) + fixes from the review.
 
 Procedure:
-  1. residualize on the condition vector c = (y, age, sex, icu_type)
-  2. nonparanormal transform (rank -> inverse normal)
+  1. nonparanormal transform (rank -> inverse normal)
+  2. residualize on a nonlinear basis of the condition vector c = (y, age, sex, icu_type)
   3. graphical lasso -> sparse precision matrix -> partial correlations
   4. bootstrap stability selection
-  5. E_fit = MST(w) ∪ top-r   <-- connectivity guaranteed automatically
-     E_holdout = the stable strong pairs that are not in E_fit
+  5. E_holdout selected first (stratified by strength, connectivity preserved), then
+     E_fit built from what is left by degree-constrained Kruskal
 
 Changes from the v2 plan, following the review:
   [review A-1] The condition vector is widened from y alone to c=(y,age,sex,icu_type).
         v2 residualized the CDG on (y,age,sex,ICU) while the generator was conditioned on
         y alone, so rho_real and rho_syn were different estimators — a bug.
+  [review A-4 / E-3] **The graph and the metric must be estimated in the same space.**
+        This script used to residualize in RAW units and then apply the nonparanormal
+        transform. `eval_dep.partial_corr_c` — the estimator the evaluation actually uses —
+        does the opposite: nonparanormal first, then residualize on a *nonlinear* basis of c.
+        Those are different estimators, so the graph we drew and the quantity we measured were
+        not the same object. Both now use `eval_dep`.
+        Order matters: subtracting a linear fit in raw units breaks the monotone relation
+        between the residual and the qubit observable, which is the whole reason the metric
+        lives in nonparanormal space (it must be invariant to the monotone local heads).
+        The basis matters too: c enters the circuit through RY/RZ angles, i.e. nonlinearly,
+        and a linear design matrix leaves half of its effect behind (measured: the spurious
+        non-edge dependency only fell from 0.0926 to 0.0532).
   [review C-3] Taking E_fit as "70% of E_candidate" yields fewer than the 15 edges needed
         to connect 16 nodes, so the graph falls apart and filler edges dilute the topology.
-        Switching to MST ∪ top-r guarantees connectivity automatically and makes filler
-        edges unnecessary.
   [review B]   Report the distribution of graph distances over the held-out pairs. We need
         to know up front whether Delta_HDE is explained by nothing more than how those
         distances happen to fall.
@@ -30,13 +40,12 @@ from pathlib import Path
 import networkx as nx
 import numpy as np
 import pandas as pd
-from scipy.stats import norm, rankdata
 from sklearn.covariance import graphical_lasso
-from sklearn.linear_model import LinearRegression
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).parent))
 
+from eval_dep import cond_basis, npn  # noqa: E402
 from features import CONDITION_VARS, CORE16  # noqa: E402
 
 MAX_DEGREE = 3       # v2 §7.6
@@ -44,16 +53,17 @@ STABILITY_TAU = 0.70  # v2 §7.5
 N_BOOTSTRAP = 100
 
 
-def nonparanormal(X: np.ndarray) -> np.ndarray:
-    """rank -> inverse normal (v2 §7.3). The HDE must be computed in this space too [review A-2]."""
-    N = X.shape[0]
-    return np.column_stack([norm.ppf((rankdata(X[:, j]) - 0.5) / N) for j in range(X.shape[1])])
+def npn_residualize(X: np.ndarray, C: np.ndarray) -> np.ndarray:
+    """nonparanormal, then residualize on a nonlinear basis of c.
 
-
-def residualize(X: np.ndarray, C: np.ndarray) -> np.ndarray:
-    """Residuals after regressing on the condition vector c (v2 §7.2). c is applied identically
-    to the real and the synthetic side."""
-    return X - LinearRegression().fit(C, X).predict(C)
+    **The same transform `eval_dep.partial_corr_c` applies to both the real and the synthetic
+    data.** The graph and the metric have to be defined in the same space, or we are drawing one
+    object and measuring another [review A-4, E-3].
+    """
+    Xn = npn(X)
+    D = cond_basis(C)
+    beta, *_ = np.linalg.lstsq(D, Xn, rcond=None)
+    return Xn - D @ beta
 
 
 def partial_corr(X: np.ndarray, alpha: float) -> np.ndarray:
@@ -212,7 +222,7 @@ def main(path: Path, alpha: float) -> None:
     X = df[names].to_numpy(float)
     C = df[["y", "age", "sex", "icu_type"]].to_numpy(float)  # condition vector c [review A-1]
 
-    X = nonparanormal(residualize(X, C))
+    X = npn_residualize(X, C)   # same space as eval_dep.partial_corr_c [review A-4, E-3]
     rho = partial_corr(X, alpha)
 
     rng = np.random.default_rng(20260711)
