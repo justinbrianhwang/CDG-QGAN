@@ -233,9 +233,122 @@ def fig_confirm() -> None:
     save(fig, "fig_confirm")
 
 
+# ---------------------------------------------------------------------------
+# Figure E — real MIMIC-IV: the training curves.   Source: results/wp2_probe.json
+# The most important panel in the paper. Three models, one critic, one loss, 12,000 steps.
+# no_entangle CONVERGES TO THE FLOOR AND STAYS THERE — Proposition D-2 as a curve, not an
+# argument: strip the RZZ gates and ~2,000 head parameters cannot manufacture one dependence.
+# ---------------------------------------------------------------------------
+PROBE_STEPS = np.arange(1000, 12001, 1000)
+PROBE = {
+    "CDG (aligned)":  [0.1262, 0.1166, 0.0988, 0.0871, 0.0886, 0.0757,
+                       0.0728, 0.0720, 0.0694, 0.0710, 0.0733, 0.0679],
+    "permuted":       [0.1260, 0.1304, 0.1211, 0.1113, 0.1012, 0.0951,
+                       0.0951, 0.0774, 0.0736, 0.0735, 0.0743, 0.0744],
+    "no_entangle":    [0.1231, 0.1132, 0.1078, 0.1033, 0.0996, 0.0986,
+                       0.0973, 0.0980, 0.0989, 0.0987, 0.0986, 0.0986],
+}
+PROBE_FLOOR = 0.0985
+REAL_CEILING = 0.0437     # RESULTS_ceiling_real.md — reachable with the GAN removed
+REAL_BOUND = 0.0331       # Corollary 1 — no L=1 CDG circuit can beat this
+
+
+def fig_training_real() -> None:
+    fig, ax = plt.subplots(figsize=(8.2, 5.0))
+
+    ax.axhspan(0, REAL_BOUND, color=GRAY, alpha=0.10, zorder=0)
+    ax.axhline(REAL_BOUND, color="#555555", ls=":", lw=1.3, zorder=2)
+    ax.text(12100, REAL_BOUND, "  Corollary 1 bound 0.0331\n  (72 pairs outside the L=1 cone)",
+            fontsize=8, color="#555555", va="center", linespacing=1.4)
+
+    ax.axhline(REAL_CEILING, color=GREEN, ls="-.", lw=1.4, zorder=2)
+    ax.text(12100, REAL_CEILING, "  ceiling 0.0437\n  (GAN removed)",
+            fontsize=8, color=GREEN, va="center", linespacing=1.4)
+
+    ax.axhline(PROBE_FLOOR, color=RED, ls="--", lw=1.5, zorder=2)
+    ax.text(12100, PROBE_FLOOR, "  floor 0.0985\n  (no dependency at all)",
+            fontsize=8, color=RED, va="center", linespacing=1.4)
+
+    for name, color, marker in (("CDG (aligned)", BLUE, "o"),
+                                ("permuted", ORANGE, "s"),
+                                ("no_entangle", GRAY, "^")):
+        ax.plot(PROBE_STEPS, PROBE[name], marker + "-", color=color, lw=2, ms=5,
+                label=name, zorder=3)
+
+    ax.annotate("no_entangle lands exactly on the floor and stays:\nwith no RZZ gates, ~2,000 head parameters\n"
+                "cannot create one dependence",
+                xy=(9800, 0.0989), xytext=(6100, 0.1290), fontsize=8.5, color="#333333",
+                linespacing=1.5, ha="left",
+                arrowprops=dict(arrowstyle="->", color="#777777", lw=1,
+                                connectionstyle="arc3,rad=-0.15"))
+    ax.annotate("3,000 steps: sitting ON the floor.\nThe first WP-2 run stopped here.",
+                xy=(3020, 0.0980), xytext=(3400, 0.0605), fontsize=8.5, color=RED,
+                linespacing=1.5, ha="left",
+                arrowprops=dict(arrowstyle="->", color=RED, lw=1))
+
+    ax.set_xlabel("training step")
+    ax.set_ylabel("conditional dependency error, all 120 pairs")
+    ax.set_title("Real MIMIC-IV: only the CDG-wired circuit learns the clinical structure",
+                 fontsize=12, pad=32)
+    ax.set_xlim(500, 12500)
+    ax.set_ylim(0.025, 0.140)
+    ax.set_xticks(PROBE_STEPS[1::2])
+    ax.legend(frameon=False, ncol=3, loc="lower left", bbox_to_anchor=(0.0, 1.005),
+              handlelength=1.8, columnspacing=1.6)
+    fig.subplots_adjust(right=0.74)
+    save(fig, "fig_training_real")
+
+
+# ---------------------------------------------------------------------------
+# Figure F — real MIMIC-IV expressivity ceiling.   Source: RESULTS_ceiling_real.md
+# GAN removed; circuit optimized directly on the real conditional pattern.
+# ---------------------------------------------------------------------------
+CEIL_REAL = {
+    "aligned\n(CDG)": 0.0437,
+    "permuted\n(isomorphic)": 0.0632,
+    "distmatched": 0.0699,
+    "rewired": 0.0730,
+    "no_entangle": 0.0969,
+}
+
+
+def fig_ceiling_real() -> None:
+    names = list(CEIL_REAL)
+    vals = [CEIL_REAL[n] for n in names]
+    colors = [GREEN if "aligned" in n else (GRAY if "no_entangle" in n else BLUE)
+              for n in names]
+
+    fig, ax = plt.subplots(figsize=(7.8, 4.4))
+    y = np.arange(len(names))[::-1]
+    ax.barh(y, vals, color=colors, height=0.62, zorder=3)
+
+    ax.axvspan(0, REAL_BOUND, color=GRAY, alpha=0.12, zorder=0)
+    ax.axvline(REAL_BOUND, color="#555555", ls=":", lw=1.3, zorder=4)
+    ax.axvline(PROBE_FLOOR, color=RED, ls="--", lw=1.4, zorder=4)
+
+    ax.text(REAL_BOUND / 2, y.max() + 0.75, "unreachable\n(Corollary 1)", ha="center",
+            fontsize=8, color="#555555", linespacing=1.3)
+    ax.text(PROBE_FLOOR, y.min() - 0.65, f"floor {PROBE_FLOOR:.4f}\nno dependency at all",
+            color=RED, fontsize=8.5, va="top", ha="center", linespacing=1.4)
+
+    for yy, v in zip(y, vals):
+        ax.text(v + 0.0016, yy, f"{v:.4f}", va="center", fontsize=9)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(names)
+    ax.set_xlabel("minimum reachable 120-pair conditional dependency error  (lower = better)")
+    ax.set_title("Real MIMIC-IV · same 21-edge budget — only the placement differs",
+                 fontsize=11.5, pad=22)
+    ax.set_xlim(0, 0.113)
+    ax.set_ylim(y.min() - 1.7, y.max() + 1.15)
+    save(fig, "fig_ceiling_real")
+
+
 if __name__ == "__main__":
     print("Writing figures to", OUT)
     fig_lightcone_cliff()
     fig_alignment_decay()
     fig_joint_ceiling()
     fig_confirm()
+    fig_training_real()
+    fig_ceiling_real()

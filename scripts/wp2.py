@@ -22,6 +22,30 @@ Required configuration (HANDOFF §2.1 — do not deviate)
              *defined* in (build_cdg uses the same transform).
   floor    : always reported. It is the score of a model that creates no dependency at all.
              Without it you cannot tell a working model from a broken one.
+  steps    : >= 8000.  NOT 3000.  See below — this is not a tuning preference.
+  batch    : 512.      NOT 256.   See below — this one decides the effect size.
+
+Two settings that are load-bearing, and why (REVISIONS §E-8)
+-----------------------------------------------------------
+The first attempt at this experiment ran 3000 steps at batch 256 and put every variant, the CDG
+included, ABOVE the floor. Neither number was innocent:
+
+  steps.  On real MIMIC the CDG error curve crosses the floor at step ~4000 and keeps falling to
+          0.0679 by 12000 (`scripts/diag_wp2_probe.py`). At 3000 it reads 0.0988 — sitting exactly
+          ON the floor of 0.0985. Real data converges ~4x slower than the synthetic teacher
+          because its dependencies are weaker (mean edge |z| 0.21 vs 0.36). A 10x10 run at 3000
+          steps yields ten numbers clustered on the floor, and a bootstrap that reports
+          "significance" on the noise between them.
+
+  batch.  The copula transform is a soft rank computed WITHIN the batch, so the batch size sets
+          how sharply the critic sees the very object it is meant to judge — a 16-dimensional
+          joint. At batch 256 the measured CDG-permuted gap is 0.0065. At batch 512 it is 0.0207,
+          which is what the training-free ceiling says the true gap is (0.0195, RESULTS_ceiling_real).
+          The small batch did not just add noise; it COMPRESSED THE EFFECT to a third of its size.
+
+So: an undersized batch and an early stop would each, on their own, have turned a real effect into
+a null. Both were present. This is why the floor is computed first and the run refuses to
+interpret itself if the CDG does not beat it.
 
 Variants — all identical in resources (edge count, depth, parameters, critic, loss, steps).
 The only difference is which clinical pair sits under which RZZ gate.
@@ -79,9 +103,18 @@ def build_variants(G_cdg: nx.Graph, E_hold, rng: np.random.Generator) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=int, default=10)
-    ap.add_argument("--steps", type=int, default=3000)
+    ap.add_argument("--steps", type=int, default=8000)
+    ap.add_argument("--batch", type=int, default=512,
+                    help="512, not 256. The copula rank is computed within the batch; "
+                         "at 256 the CDG-permuted effect shrinks to a third. REVISIONS E-8.")
     ap.add_argument("--depth", type=int, default=1, help="L. 1 = confirmatory; 2 = negative control")
     ap.add_argument("--n-syn", type=int, default=20000)
+    # Sharding. One run is ~30 min at 8000x512, and the full design is 10 variants x 10 seeds =
+    # 100 runs = ~50 h serial. These runs leave the GPU mostly idle (light-cone subcircuits, small
+    # batches), so 3 concurrent shards cost ~1.7x each in wall-clock and win ~1.8x in throughput.
+    # Each shard writes its own JSON; `wp2_report.py` aggregates and does the floor gate + bootstrap.
+    ap.add_argument("--shard", type=int, default=0)
+    ap.add_argument("--nshards", type=int, default=1)
     args = ap.parse_args()
 
     names = [f.name for f in CORE16]
@@ -110,17 +143,25 @@ def main() -> None:
                         C[r.permutation(len(C))]))
     floor = float(np.mean(fl))
 
+    # The variant set is built from a FIXED seed, so every shard constructs the identical graphs
+    # and can then take its own slice by name. Sharding must not change the experiment.
     variants = build_variants(G_cdg, E_hold, np.random.default_rng(20260711))
+    mine = {k: v for i, (k, v) in enumerate(variants.items())
+            if i % args.nshards == args.shard}
 
     print("=" * 92)
     print(f"WP-2 confirmatory experiment — real MIMIC-IV · L={args.depth} · "
-          f"{args.seeds} seeds · {args.steps} steps")
+          f"{args.seeds} seeds · {args.steps} steps · batch {args.batch}")
+    if args.nshards > 1:
+        print(f"  shard {args.shard + 1}/{args.nshards}: {', '.join(mine)}")
     print("=" * 92)
     print(f"  cohort : n={len(df):,}  ·  CDG {G_cdg.number_of_edges()} edges  "
           f"max degree {max(dict(G_cdg.degree()).values())}  diameter {nx.diameter(G_cdg)}")
     print(f"  critic : copula + batch-aware   ·   loss: pure WGAN-GP, no dependency term")
     print(f"  metric : conditional partial correlation over all 120 pairs (eval_dep)")
     print(f"  floor  : {floor:.4f}   <- a model that creates no dependency at all")
+    print(f"  ceiling: 0.0437         <- reachable without a GAN (RESULTS_ceiling_real.md)")
+    print(f"  bound  : 0.0331         <- no L=1 CDG circuit can beat this (Corollary 1)")
     if args.depth != 1:
         print(f"\n  ** L={args.depth} is a NEGATIVE CONTROL. The effect is expected to vanish. **")
     print()
@@ -128,10 +169,11 @@ def main() -> None:
     print("  " + "-" * 56)
 
     res = {}
-    for name, Gv in variants.items():
+    for name, Gv in mine.items():
         rows, t0 = [], time.time()
         for s in range(args.seeds):
-            cfg = Cfg(steps=args.steps, seed=s, copula=True, batch_critic=True, lr_q=5e-3)
+            cfg = Cfg(steps=args.steps, batch=args.batch, seed=s,
+                      copula=True, batch_critic=True, lr_q=5e-3)
             Gm = train_fix2(X, C, list(Gv.edges()), cfg)
             Xs, Cs = generate(Gm, C, args.n_syn, s)
             rows.append(score(Xs, Cs))
@@ -140,63 +182,19 @@ def main() -> None:
         print(f"  {name:<18} {Gv.number_of_edges():>4} {m:>10.4f} ± {sd:.4f} "
               f"{(m - floor) / floor * 100:>+9.1f}%   ({time.time()-t0:.0f}s)", flush=True)
 
-    # ---- gate: did anything learn at all? --------------------------------
-    #
-    # If the model does not beat the floor, NOTHING below is interpretable. Every topology
-    # scores the same when nothing learns dependency, and a bootstrap CI over near-identical
-    # numbers will happily report a "significant" difference of 0.0007. We nearly published
-    # that mistake once (REVISIONS §E-2); the code refuses to let it happen quietly.
-    print()
-    print("=" * 92)
-    cdg = np.array(res["cdg"])
-    if cdg.mean() >= floor:
-        print("  ** STOP — the trained CDG model LOSES to a model that creates no dependency **")
-        print(f"     CDG {cdg.mean():.4f}  vs  floor {floor:.4f}")
-        print()
-        print("     Nothing has learned any dependency, so every topology scores alike and the")
-        print("     contrasts below are noise. Do NOT read them as evidence for or against the")
-        print("     hypothesis — a bootstrap CI over near-identical numbers will report")
-        print("     'significance' that means nothing.")
-        print()
-        print("     Likely causes, in order:")
-        print("       - too few steps (this is what a short smoke run looks like)")
-        print("       - the critic is not the copula + batch-aware one (HANDOFF §2.1)")
-        print("       - the metric is not eval_dep.partial_corr_c")
-        print("     See RESULTS_lr.md and REVISIONS §E-7.")
-        print("=" * 92)
-
-
-    def group(prefix):
-        return np.concatenate([res[k] for k in res if k.startswith(prefix)])
-
-    rng = np.random.default_rng(0)
-    for label, ctrl in (("permuted (3 graphs)", group("permuted")),
-                        ("distance-matched (3 graphs)", group("distmatched")),
-                        ("rewired", np.array(res["rewired"])),
-                        ("ring", np.array(res["ring"])),
-                        ("no_entangle", np.array(res["no_entangle"]))):
-        d = cdg.mean() - ctrl.mean()
-        # hierarchical bootstrap over seeds
-        boot = [rng.choice(cdg, len(cdg)).mean() - rng.choice(ctrl, len(ctrl)).mean()
-                for _ in range(5000)]
-        lo, hi = np.percentile(boot, [2.5, 97.5])
-        ok = hi < 0
-        print(f"  CDG − {label:<28} = {d:+.4f}   95% CI [{lo:+.4f}, {hi:+.4f}]   "
-              f"{'CDG better' if ok else 'not significant' if lo < 0 < hi else 'CDG WORSE'}")
-
-    print()
-    print("  Primary: CDG − permuted < 0, CI excludes 0.")
-    print("  Decisive: CDG − distance-matched < 0. Beating the isomorphic permutation alone")
-    print("            could be graph combinatorics; distance matching is what isolates the")
-    print("            clinical claim.")
-    print(f"  Sanity  : every variant must be compared against the floor ({floor:.4f}). A model")
-    print("            that loses to it has learned nothing, and nothing downstream is meaningful.")
-
+    # No analysis here. A shard holds only part of the design, and a shard that tried to
+    # interpret itself would be reading contrasts against controls it never ran. Aggregation,
+    # the floor gate and the bootstrap all live in `wp2_report.py`, which refuses to run until
+    # every variant is present.
     RESULTS.mkdir(exist_ok=True)
-    out = RESULTS / f"wp2_L{args.depth}.json"
-    out.write_text(json.dumps({"floor": floor, "results": res,
-                               "seeds": args.seeds, "steps": args.steps}, indent=2))
+    out = RESULTS / (f"wp2_L{args.depth}.json" if args.nshards == 1
+                     else f"wp2_L{args.depth}_shard{args.shard}.json")
+    out.write_text(json.dumps({"floor": floor, "results": res, "seeds": args.seeds,
+                               "steps": args.steps, "batch": args.batch}, indent=2))
     print(f"\n  saved: {out}")
+    if args.nshards > 1:
+        print(f"  shard {args.shard + 1}/{args.nshards} done. "
+              f"Run `python scripts/wp2_report.py` once all shards finish.")
 
 
 if __name__ == "__main__":

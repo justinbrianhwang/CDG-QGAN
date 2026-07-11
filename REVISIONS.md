@@ -579,6 +579,124 @@ than the floor), and its remaining rows were (B)/permuted and (A)+(B) — varian
 that had each already failed on their own. The GPU went to `confirm.py` instead. Recording this
 because silently dropping runs is how "we only report what worked" happens.
 
+### E-8. Real MIMIC-IV: the fix of E-7 was necessary but not sufficient
+
+The copula critic (E-7) rescued the **synthetic** run. Ported unchanged to real MIMIC-IV, WP-2
+failed again in the same shape as the original null: every variant, the CDG included, scored
+**above the floor** (CDG 0.1307 vs floor 0.0985 — worse than creating no dependency at all).
+
+Four experiments were run before touching anything. In order:
+
+**1. Is there any signal to find?** (`scripts/diag_signal.py`)
+The floor is not an arbitrary bar — it *is* the mean |Fisher-z| of the true structure, because a
+zero-dependency model's error on a pair equals |z_true(u,v)|.
+
+| | mean \|z\| |
+|---|---|
+| all 120 pairs | 0.0986 ← *this is the floor* |
+| 21 CDG edges | 0.2149 |
+| 48 pairs inside the L=1 cone | 0.1638 |
+| 72 pairs outside the cone | 0.0551 ← Corollary 1 forces the model to 0 here |
+| sampling noise at n=20,000 | 0.0058 |
+
+A circuit that perfectly fit everything reachable would score **0.0331**, paying only the
+unreachable pairs. So there was a 67% improvement available and the metric was clean. The model
+was not failing to *find* dependency; it was **manufacturing dependency that is not there**.
+
+**2. Is the pattern representable at all?** (`scripts/ceiling_real.py`, `RESULTS_ceiling_real.md`)
+GAN removed, circuit optimized directly on the real conditional pattern:
+
+| model | 120-pair error | above irreducible (0.0331) |
+|---|---|---|
+| **aligned (CDG)** | **0.0437** | **+0.0106** |
+| permuted | 0.0632 | +0.0301 |
+| distmatched | 0.0699 | +0.0369 |
+| rewired | 0.0730 | +0.0399 |
+| no_entangle | 0.0969 | +0.0638 |
+| *floor* | *0.0986* | — |
+
+**The design is confirmed on real data.** The CDG circuit nearly saturates its own light cone, it
+beats the distance-matched control by 0.0262, and `no_entangle` lands *on* the floor — Proposition
+D-2, measured: strip the RZZ gates and ~2,000 head parameters cannot manufacture one dependence.
+Verdict: a **training** failure, not a design failure.
+
+**3. Was it undertrained?** (`scripts/diag_wp2_probe.py`) Partly, and catastrophically so:
+
+```
+cdg   1k     2k     3k     4k     5k     6k     7k     8k     9k    10k    11k    12k
+    0.1262 0.1166 0.0988 0.0871 0.0886 0.0757 0.0728 0.0720 0.0694 0.0710 0.0733 0.0679
+```
+
+The curve crosses the floor **exactly at step 3000** (0.0988), which is precisely where WP-2 was
+configured to stop. Real MIMIC converges ~4x slower than the synthetic teacher — its dependencies
+are weaker (mean edge |z| 0.21 vs 0.36). A 10-variant x 10-seed run at 3000 steps would have
+produced ten numbers clustered on the floor and a bootstrap reporting "significance" on the noise
+between them. **The STOP gate in `wp2.py` fired correctly and saved the run.**
+
+**4. Are the heads destroying it?** (`scripts/diag_head.py`) The hypothesis was that the copula
+critic, being blind to marginals, leaves nothing to keep `h_u` monotone in `q_u` — and
+monotonicity is load-bearing, since it is what makes `copula(x) = copula(q)`.
+
+| head | graph | error on q | error on x | fold % |
+|---|---|---|---|---|
+| free MLP | cdg | 0.1092 | 0.0943 | **57.9%** |
+| free MLP | permuted | 0.1344 | 0.1180 | 56.2% |
+| monotone | cdg | 0.1030 | **0.1455** | 0.0% |
+| monotone | permuted | 0.0977 | 0.1410 | 0.0% |
+
+The heads *do* fold, on 58% of the q-grid. But forcing monotonicity (fold → 0.0%) made the x-error
+**worse**, not better, and collapsed the CDG–permuted q-gap (0.1030 vs 0.0977). **Hypothesis
+refuted. The monotone head is not adopted.**
+
+**5. A second hypothesis, also refuted.** (`scripts/diag_fix3.py`) The monotone-head failure
+suggested a deeper mismatch: `eval_dep.partial_corr_c` residualizes on a nonlinear basis of `c`
+before it measures anything, while the copula critic soft-ranks `x` **pooled over c** and never
+residualizes. So the critic judges the *pooled* copula and the metric scores the *c-conditional*
+one. That looked like a third instance of the estimator-mismatch bug (A-4/E-3), and the obvious
+fix was to give the critic the metric's own view.
+
+**It made things worse — and specifically, it destroyed the effect:**
+
+| critic | CDG | permuted | contrast |
+|---|---|---|---|
+| **pooled copula (unchanged)** | **0.0694** | **0.0901** | **−0.0207** |
+| residualized on c | 0.0734 | 0.0745 | −0.0011 |
+
+Residualizing the critic's input pulls the permuted model *up* to the CDG's level (0.0901 → 0.0745)
+and wipes the contrast out. **Rejected.** The critic stays as it was, which is also the better
+outcome for v2 §8.10: we did not have to move the metric's transform into the training loop.
+
+Recording this because the diagnosis above was written *before* the test and was wrong. Both
+mechanisms I proposed — folding heads and a critic/metric space mismatch — are real phenomena and
+neither was the cause.
+
+#### The actual cause: two hyperparameters, neither of them a hypothesis
+
+| | wrong | right | what it cost |
+|---|---|---|---|
+| steps | 3000 | **≥ 8000** | the model sat exactly ON the floor (0.0988 vs 0.0985) |
+| batch | 256 | **512** | the CDG−permuted effect shrank to a third (0.0065 vs 0.0207) |
+
+The batch size matters because the copula transform is a **soft rank computed within the batch**,
+so the batch is the critic's entire view of the 16-dimensional joint it is meant to judge. At 256
+that view is too noisy to separate a well-placed edge from a badly-placed one, and *both* models
+drift to the same mediocre solution. The small batch did not merely add noise — it **compressed
+the effect**, which is far more dangerous, because the run still completes and still reports a
+number.
+
+At batch 512 / 8000 steps the trained contrast is **−0.0207**, against a training-free ceiling
+that says the true gap is **−0.0195** (`RESULTS_ceiling_real.md`). The effect is fully recovered.
+
+#### The lesson, which is not the one I expected
+
+An undersized batch and an early stop would *each on their own* have turned a real effect into a
+null, and both were present. Neither is visible from the loss curve; neither throws an error; the
+experiment runs to completion and prints a clean table of ten numbers that all look alike.
+
+The only thing that caught it was **scoring a model that creates no dependency at all** and
+noticing that the trained model lost to it. That check costs nothing and it has now fired twice on
+this project, correctly both times. It is the single most valuable line of code in the repository.
+
 ### E-5. A bug caught along the way: `no_entangle` falls back to the full statevector
 
 Because of the `lightcone and len(edges)` guard in `model.py`, a graph with zero edges could not
