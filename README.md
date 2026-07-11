@@ -36,16 +36,21 @@ structure we observe in the output came from the circuit topology, and nowhere e
 
 ### The light cone is exact, and it is why the circuit must be shallow
 
+The light cone of a feature is the set of features it can possibly depend on. It widens with
+depth, and once it swallows the whole graph the topology stops saying anything.
+
+![the light cone on the graph](figures/fig_lightcone_graph.png)
+
+The cliff at `d = 2L` is not an approximation — it is exact, and it is measurable. Optimizing
+the circuit to maximize the correlation of a single pair at graph distance `d`, the achievable
+`|ρ|` collapses precisely at `d = 2L`, independently at `L=1` and `L=2`. Outside the cone the
+maximum is 0.012, which is sampling noise, not expressivity.
+
 ![the light-cone cliff](figures/fig_lightcone_cliff.png)
 
-Optimizing the circuit to maximize the correlation of a single pair at graph distance `d`,
-the achievable `|ρ|` falls off a cliff at exactly `d = 2L` — independently reproduced at
-`L=1` and `L=2`. Outside the cone the maximum is 0.012, which is sampling noise, not
-expressivity.
-
-This is what forces `L=1`. At `L=3` all 120 pairs fall inside the light cone, the topology
-constrains nothing, and the CDG becomes **identical to a permuted graph by definition**. The
-alignment effect decays exactly as the theory predicts:
+This is what forces `L=1`. On the real CDG, `L=2` already fails the alignment precheck, and at
+`L=3` all 120 pairs fall inside the cone — the CDG becomes **identical to a permuted graph by
+definition**. The effect decays exactly as the theory predicts:
 
 ![alignment effect decays with depth](figures/fig_alignment_decay.png)
 
@@ -56,9 +61,19 @@ discriminative power hold simultaneously. See `REVISIONS.md` A-1 for the full ar
 
 ### Alignment carries real information — the CDG beats every control
 
+The whole claim rests on one contrast. Take the CDG, and relabel it: keep every node, every
+edge, the degree sequence, and the triangles, and change **only which clinical variable sits
+on which qubit**. A strongly dependent pair that was adjacent is now far apart — and by the
+corollary, *unrepresentable at any parameter setting*.
+
+![CDG vs isomorphic permutation](figures/fig_cdg_vs_permuted.png)
+
+The triangles are the mechanism. They are why a strong pair stays at distance 2 — inside the
+cone — even when its own edge is held out. A permutation scatters those pairs beyond `2L`,
+and no amount of training can recover what the topology has forbidden.
+
 With the GAN removed and the circuit optimized directly on the full 120-pair dependency
-pattern, the placement of the entangling gates dominates the outcome. Every variant gets the
-**same 19-edge budget**; only *which clinical pair sits on top of an RZZ* differs.
+pattern, that is exactly what happens. Every variant gets the **same 19-edge budget**:
 
 ![joint expressivity ceiling](figures/fig_joint_ceiling.png)
 
