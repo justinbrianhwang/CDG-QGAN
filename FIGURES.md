@@ -1,5 +1,43 @@
 # Figure prompts for the README
 
+## Revision round 1 — what came back and what to fix
+
+| Figure | Verdict |
+|---|---|
+| 4 — local heads | **accept as-is** |
+| 6 — the MAP trap | **accept as-is** |
+| 2 — light cone | usable, but redraw on the real CDG rather than a square lattice |
+| 1 — pipeline | **fix**: the CDG has only 15 nodes and node `13` appears twice; heads all share the subscript `u` |
+| 3 — aligned vs permuted | **redraw**: it is drawn as a ring, so there are no triangles at all — yet the caption claims "same triangles". A ring is also one of our actual control graphs, so using it here is actively confusing. Also `pH` is not one of our 16 features and `respiratory rate` is missing |
+| 5 — data provenance | **fix**: the arrow out of `hosp / labevents` goes to the condition vector. It must go to the 10 labs. The condition vector is fed by `patients` / `admissions` / `icustays` |
+
+### The 16 features — use exactly these names, no others
+
+`heart rate`, `SBP`, `DBP`, `respiratory rate`, `SpO2`, `temperature` (6 vitals) ·
+`WBC`, `glucose`, `sodium`, `potassium`, `chloride`, `bicarbonate`, `creatinine`, `BUN`,
+`hemoglobin`, `platelets` (10 labs).
+
+There is **no pH**. There is **no MAP** among the generated features (MAP is evaluation-only;
+see Figure 6).
+
+### The reference graph — use this same 16-node graph in Figures 1, 2, and 3
+
+Four clusters of four, each cluster containing a triangle, joined by three bridges. The
+triangles are the point: they are why a strong pair stays at distance 2 even when its own
+edge is held out.
+
+```
+circulation   : heart rate — SBP — DBP  (triangle),  DBP — respiratory rate
+respiration   : SpO2 — temperature — WBC (triangle),  WBC — glucose
+electrolytes  : sodium — potassium — chloride (triangle),  chloride — bicarbonate
+renal/heme    : creatinine — BUN — hemoglobin (triangle),  hemoglobin — platelets
+bridges       : respiratory rate — SpO2,  glucose — sodium,  bicarbonate — creatinine
+```
+
+Maximum degree 3. Do not add edges. Do not draw it as a ring or as a lattice.
+
+---
+
 ## Ground rules
 
 **Do NOT generate figures that carry data with an image model.** Bar heights, curves, and
@@ -207,6 +245,90 @@ data-preparation stage and it is worth its own figure.
 > reviewer reduce our result to "you recovered division by three."`
 >
 > [+ shared style directive]
+
+---
+
+---
+
+# Revision prompts (round 2)
+
+Paste each of these together with the shared style directive.
+
+## Fix for Figure 1 — pipeline
+
+> Keep the existing five-stage layout, the colors, and the dotted guidelines between the CDG
+> and the RZZ links. Change only these two things.
+>
+> **(a)** The CDG in Stage 2 currently has 15 nodes and the label `13` appears twice. Redraw
+> it as the reference graph, with exactly 16 nodes, using clinical names rather than numbers:
+> four clusters of four, each containing a triangle, joined by three bridges —
+> `heart rate — SBP — DBP` (triangle) and `DBP — respiratory rate`;
+> `SpO2 — temperature — WBC` (triangle) and `WBC — glucose`;
+> `sodium — potassium — chloride` (triangle) and `chloride — bicarbonate`;
+> `creatinine — BUN — hemoglobin` (triangle) and `hemoglobin — platelets`;
+> bridges `respiratory rate — SpO2`, `glucose — sodium`, `bicarbonate — creatinine`.
+> Cluster captions: `circulation`, `respiration`, `electrolytes`, `renal / hematology`.
+> Maximum degree 3. The RZZ links in Stage 3 must connect exactly these 19 pairs.
+>
+> **(b)** In Stage 4, the 16 local heads are all labeled `h_u(q_u, c)` with the same subscript.
+> Label them individually instead: `h_1(q_1, c)`, `h_2(q_2, c)`, … , `h_16(q_16, c)`. The point
+> is that each feature has its *own* head.
+
+## Fix for Figure 3 — aligned vs permuted (redraw)
+
+> Discard the ring layout entirely — a ring has no triangles, yet the caption claims the two
+> graphs share triangles, and a ring is separately one of our control conditions, so drawing
+> it here misleads.
+>
+> Draw two side-by-side panels showing the SAME 16-node graph with DIFFERENT node labels.
+>
+> The graph (identical in both panels): four clusters of four, each cluster containing a
+> triangle, joined by three bridges. Maximum degree 3. 19 edges. Lay the two panels out with
+> *pixel-identical geometry* — same node positions, same edges, same shape. Only the text on
+> the nodes differs.
+>
+> Left panel, titled `Aligned (CDG)`, green accent. Label the nodes so that clinically related
+> variables land in the same triangle:
+> `heart rate, SBP, DBP` + `respiratory rate` · `SpO2, temperature, WBC` + `glucose` ·
+> `sodium, potassium, chloride` + `bicarbonate` · `creatinine, BUN, hemoglobin` + `platelets`.
+> Draw the `creatinine`—`BUN` edge as a thick green line and label it
+> `|ρ| = 0.66 — adjacent, inside the light cone ✓`.
+>
+> Right panel, titled `Permuted (isomorphic)`, red accent. Same graph, but the 16 clinical
+> labels are scrambled across the nodes so that `creatinine` and `BUN` end up in *different*
+> clusters, far apart. Draw a thick red dashed line between them, routed the long way through
+> the graph, and label it `|ρ| = 0.66 — distance 5, outside the light cone ✗ unrepresentable`.
+>
+> Shared caption bar underneath: `Same nodes. Same edges. Same degree sequence. Same
+> triangles. The ONLY difference is which clinical pair sits where.`
+>
+> Use only these 16 names — there is no pH: heart rate, SBP, DBP, respiratory rate, SpO2,
+> temperature, WBC, glucose, sodium, potassium, chloride, bicarbonate, creatinine, BUN,
+> hemoglobin, platelets.
+
+## Fix for Figure 5 — data provenance
+
+> Keep the layout, the three column headers, the timeline, and all the text. Fix the wiring
+> on the right-hand side only. Currently the arrow leaving `hosp / labevents` points at the
+> condition vector box, which is wrong.
+>
+> Correct wiring:
+> - `icu / chartevents` → the `6 vital signs` box
+> - `hosp / labevents` → the `10 labs` box
+> - `hosp / patients`, `hosp / admissions`, `icu / icustays` → the `condition vector c` box
+>
+> Draw those as three clearly separated arrow paths so a reader can trace each source to its
+> destination.
+
+## Optional improvement to Figure 2 — light cone
+
+> The current version draws the graph as a square lattice. Redraw it on the same reference
+> graph used in Figures 1 and 3 (four clusters of four, each with a triangle, joined by three
+> bridges), so that all three figures show the same object. Keep everything else.
+>
+> Left panel `L = 1 (reach radius 2)`: pick `creatinine` as the node `u`. Shade the nodes
+> within graph distance 2 of it. Keep both callouts.
+> Right panel `L = 3 (reach radius 6)`: the shaded region now covers every node.
 
 ---
 

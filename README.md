@@ -25,6 +25,15 @@ words, "Clinical" is not a mere modifier — it demonstrably contributes bits.
   this identity computationally: instead of a 2^16 statevector we simulate only a
   2^|N_L(u)| subcircuit per qubit.
 
+### Why the decoder has to be this crippled
+
+![local heads cannot mix features](assets/images/Figure%204.png)
+
+A dense decoder could manufacture cross-feature dependency out of thin air, and then the
+quantum core would prove nothing. Restricting each head to one qubit makes the entangling
+angles the **only** parameters in the model that can create dependency — so any dependency
+structure we observe in the output came from the circuit topology, and nowhere else.
+
 ### The light cone is exact, and it is why the circuit must be shallow
 
 ![the light-cone cliff](figures/fig_lightcone_cliff.png)
@@ -103,6 +112,22 @@ MIMIC-IV / eICU are subject to PhysioNet **credentialed access + a Data Use Agre
 Neither the raw data nor any **patient-level** data derived from it may ever enter this
 repository. All of it stays in the local archive only. Paths and acquisition instructions are
 in `DATA.md`.
+
+### One feature had to be thrown out
+
+![the MAP trap](assets/images/Figure%206.png)
+
+Mean arterial pressure is not a clinical dependency — it is an **arithmetic identity**,
+`MAP ≈ (SBP + 2·DBP)/3` with R² = 0.860 on n = 51,587. Because it is a deterministic function
+of SBP and DBP, conditioning on it in the precision matrix **flips the sign** of ρ(SBP, DBP)
+from +0.499 to −0.508: a collider artifact that puts a physiologically incorrect edge into
+the CDG. It also hands a reviewer an easy dismissal — *"you recovered division by three."*
+
+MAP is still extracted, but only as an evaluation variable: we compute `MAP~` from the
+generated `SBP~` and `DBP~` and compare it against the real distribution, which is a stricter
+test than generating it directly. WBC took its slot — this is critical-care data and the
+inflammation axis was missing entirely. Hematocrit was dropped from the fallback list for the
+same reason (`Hct ≈ 3 × Hb`, r = 0.962).
 
 ## Environment
 
