@@ -388,6 +388,73 @@ not enough.
 > **Running WP-2 (9 variants × 10 seeds = 90 runs) right now would be entirely wasted effort.**
 > The contrast is real (E-2b) but the training destroys it (E-1, E-2). Fix E-2/E-3 first.
 
+### E-6. [DECISION REQUIRED] The learning rate is refuted. §8.10's ban on a dependency term has disabled the model.
+
+Evidence: `scripts/diag_lr.py` · `RESULTS_lr.md`
+
+Sweeping the quantum learning rate over three orders of magnitude:
+
+| `lr_q` | mean \|Δγ\| (rad) | 120 pairs | **19 true edges** | 101 non-edges |
+|---|---|---|---|---|
+| 5e-5 *(current)* | 0.0960 | 0.1350 | **0.3667** | 0.0915 |
+| 5e-3 | 0.2926 | 0.1197 | **0.4026** | 0.0665 |
+| 5e-2 | **2.0110** | 0.1748 | **0.3589** | 0.1402 |
+| *floor (zero dependency)* | — | *0.0648* | *0.3676* | *0.0078* |
+| *ceiling (direct optimization)* | — | *0.0103* | *~0* | *~0* |
+
+(aligned; `lr_q=5e-2 / permuted` was lost to a crashed run and is not load-bearing.)
+
+**At `lr_q = 5e-2` the angles move 2.0 radians — they are not frozen — and the true-edge error
+is still 0.3589 against a floor of 0.3676.** Meanwhile the non-edge false positives explode and
+the overall score gets *worse*. There is no learning rate at which this model learns the true
+dependency structure. Raising `lr_q` moves `gamma` faster in the wrong direction.
+
+The diagnostic detail that settles it: at `lr_q=5e-3`, aligned's angles move **2.5× further**
+than permuted's (0.2926 vs 0.1164 rad) — the critic pushes hardest on the circuit that actually
+has RZZ gates on the true edges — and aligned comes out **worse** than the floor. More gradient,
+in the wrong direction, does more damage exactly where there was more to gain.
+
+**Conclusion: the WGAN-GP critic cannot identify which pairs ought to be dependent. The gradient
+it supplies to `gamma` is noise.**
+
+#### This is a failed design decision, not a bug
+
+v2 §8.10 forbids any dependency term in the loss, to avoid the circular argument *"you optimized
+the evaluation metric, so of course you score well on it."* The measured consequence of that ban
+is **a model that learns no conditional dependency at all, under any topology.** The rule meant to
+protect the claim has disabled the model that was supposed to make it.
+
+**WP-2 cannot be run as specified.** A confirmatory experiment across 9 topologies × 10 seeds,
+using an objective that provably learns zero dependency for every topology, measures nothing.
+
+#### The three ways out
+
+**(A) Make the critic able to see dependency — without naming the metric.** A per-sample MLP
+critic on 16 dimensions has to infer a correlation structure from single rows; in practice it
+converges to matching marginals, which the ~2000 head parameters can do on their own, and ignores
+the joint. Standard remedy: a **batch-aware critic** (minibatch discrimination, Salimans et al.
+2016), which lets the critic compare a *batch's* structure against the real batch's. This is a
+generic architectural technique, not the evaluation metric, so §8.10 survives intact.
+*Cost: one experiment. If it works, the paper keeps a real generative model.*
+
+**(B) Put a dependency term on `E_fit` only, and evaluate on held-out pairs.** Non-circular by
+construction: no model ever optimized the pairs it is scored on. This is what HDE was designed
+for. *Caveat: A-2 demoted HDE precisely because held-out reachability is decided by graph
+combinatorics, which is why B-1's distance-matched control exists. Workable but delicate.*
+
+**(C) Reframe. Make the expressivity ceiling the primary result and report the GAN failure as an
+honest secondary finding.** The scientific claim — that CDG alignment carries information — is
+already fully supported by `RESULTS_ceiling_joint.md`, and it is non-circular in the way that
+matters: aligned and permuted get identical objectives and identical budgets, and permuted simply
+*cannot represent* what it needs to. "A standard adversarial objective does not exploit this
+structure at all" is itself a real result about tabular GANs.
+*Cost: the paper loses its working generator, and with it the synthetic-data application.*
+
+**Recommendation: (A) first.** It is one experiment, it preserves §8.10, and it targets the exact
+failure mode observed (the generator fits marginals and ignores the joint). If (A) fails, (C) is
+the honest fallback and it is already fully evidenced — but it costs the application, so it should
+not be chosen before (A) has been tried.
+
 ### E-5. A bug caught along the way: `no_entangle` falls back to the full statevector
 
 Because of the `lightcone and len(edges)` guard in `model.py`, a graph with zero edges could not
