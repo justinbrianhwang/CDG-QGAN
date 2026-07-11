@@ -298,11 +298,49 @@ parameter that can create cross-feature dependency).** `gamma` is never learned 
 noise, so turning entanglement off yields a better score. The alignment effect (expected
 magnitude ~0.01) is completely buried in this noise.
 
-**This is not an expressivity problem.** `ceiling.py` showed that at L=1 the adjacent-pair
-ceiling is `|ρ|=0.991`. The problem is that gradient descent does not reach that solution.
-`scripts/ceiling_joint.py` removes the GAN and runs gradient descent **directly** on the
-120-pair pattern, to decide whether this is "representable but the GAN cannot find it" or
-"the full pattern is unrepresentable in the first place".
+**This is not an expressivity problem — and that is now settled, not conjectured.**
+
+### E-2b. [RESOLVED] The gate: the circuit CAN represent the pattern, and the CDG wins by 4.5x
+
+Evidence: `scripts/ceiling_joint.py` · `RESULTS_ceiling_joint.md`
+
+With the GAN removed and the circuit optimized **directly** on the full 120-pair pattern
+(scored on a fixed held-out draw of 65,536 samples, identically for every variant and for the
+floor):
+
+| Model | \|E\| | 120-pair min. error | vs. floor |
+|---|---|---|---|
+| **aligned** (true CDG) | 19 | **0.0103** | **83.0%** |
+| rewired | 19 | 0.0401 | 34.1% |
+| distmatched | 19 | 0.0421 | 30.8% |
+| permuted | 19 | 0.0468 | 23.2% |
+| no_entangle | 0 | 0.0508 | 16.7% |
+| *floor (zero dependency)* | — | *0.0609* | — |
+
+Three things follow, and together they rewrite the status of the project:
+
+1. **A solution exists and gradient descent reaches it.** aligned gets to 0.0103 against a true
+   signal magnitude of 0.351. Satisfying the 19 edges and the 101 non-edges *simultaneously* is
+   not the obstacle. **Expressivity is not the bottleneck.**
+2. **The CDG hypothesis is true at the representational level.** Same 19-edge budget, same degree
+   sequence, same triangles — aligned still beats permuted by 4.5x on error, and beats the
+   **distance-matched** control by 4.1x. Since distance-matching cancels the "advantage of being
+   nearby", the remaining gap can only come from *the edges the CDG chose carrying real
+   dependency structure*. **The premise of the confirmatory experiment is sound.**
+3. **Therefore the failure is entirely in training.** WGAN-GP sits 13x away from a solution the
+   same circuit demonstrably reaches (0.1359 vs 0.0103).
+
+This is the most consequential result so far, and note the counterfactual: had we run WP-2's 90
+confirmatory runs *before* this check, they would have returned the same null, and we would have
+concluded that **the CDG hypothesis was false** — when in fact it is the training objective that
+is broken.
+
+**A methodological note, because the number was nearly wrong.** `fit()` originally scored the
+best training minibatch seen along the trajectory. Each step draws a fresh minibatch, so `min`
+over 1500 steps returns the *luckiest draw*, not the best parameters — and since `floor` was
+computed analytically (noise-free), that optimistic bias landed on only one side of the
+comparison. Both sides are now scored with the same estimator on the same fixed held-out draw.
+Fixing it made the separation **larger**: aligned 0.0130 → 0.0103, permuted 0.0491 → 0.0468.
 
 ### E-3. Estimator mismatch — the metric is computed in a different space from the CDG definition
 
@@ -321,18 +359,34 @@ not enough.
 
 ### E-4. Actions (mandatory before starting WP-2)
 
-1. **[GATE]** The verdict from `ceiling_joint.py`. If it comes back "unrepresentable", the
-   circuit design must be reconsidered and WP-2 is pointless.
+1. **[GATE — PASSED]** `ceiling_joint.py`. See E-2b. The circuit can represent the pattern and the
+   CDG beats every control. The design is sound; the training is not.
 2. **Align the metric with the CDG definition.** Replace it with partial correlation conditional
    on `c`, using an estimator that handles nonlinear conditioning properly (linear
-   residualization removes only half of the false positives).
-3. **Make WGAN-GP actually learn dependencies.** v2 §8.10 forbids a dependency loss in order to
-   avoid a circular argument, and the result is **a model that learns no dependencies at all**.
-   This tension must be resolved. We need a way to make the critic sensitive to pairwise
-   structure without directly optimizing the metric.
+   residualization removes only half of the false positives). This defect exists in the real
+   MIMIC pipeline too, not only in the benchmark.
+3. **Make WGAN-GP actually learn dependencies.** This is now the critical path.
+
+   The leading candidate is **the learning rate**. `ceiling_joint` uses Adam `lr = 0.05` on the
+   quantum parameters; `train.py` applies `lr_g = 5e-5` to *everything* — 1000x smaller. Quantum
+   angles are in radians and need to move O(0.1–1) rad to create meaningful entanglement, but a
+   learning rate tuned for ~2000 classical head weights was applied unchanged to the 19 entangling
+   angles. `scripts/diag_lr.py` measures how far `gamma` actually moves and sweeps
+   `lr_q ∈ {5e-5, 5e-3, 5e-2}`.
+
+   **Note that a per-parameter-group learning rate is *not* a circular fix**: the loss stays pure
+   WGAN-GP and the evaluation metric never enters it. v2 §8.10 is respected.
+
+   If raising `lr_q` does *not* pull the true-edge error off the floor, then the cause is deeper —
+   the critic simply cannot see pairwise conditional dependence in a 16-dimensional joint, while
+   the ~2000 head parameters are free to fit the marginals, so the GAN converges to matching
+   marginals and ignores dependency entirely. In that case §8.10's ban on any dependency term is
+   in direct conflict with the model learning anything at all, and that tension has to be resolved
+   on its merits — we would need a critic that is sensitive to pairwise structure *without*
+   optimizing the evaluation metric.
 
 > **Running WP-2 (9 variants × 10 seeds = 90 runs) right now would be entirely wasted effort.**
-> E-1 through E-3 come first.
+> The contrast is real (E-2b) but the training destroys it (E-1, E-2). Fix E-2/E-3 first.
 
 ### E-5. A bug caught along the way: `no_entangle` falls back to the full statevector
 
