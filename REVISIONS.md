@@ -882,6 +882,104 @@ The claim in the paper is therefore: **the copula is preserved up to the tie str
 the discreteness of the real marginals; the effect is uniform across all topologies, including the
 zero-entanglement control, and so cannot be a source of dependency.**
 
+### E-11. [RESOLVED] v3 — the copula critic keeps the dependency, a 1-D term restores the marginals
+
+§E-10 established the defect: the copula critic is blind to the marginals by design, so nothing in
+the loss trains the heads to fit them, so they don't. W₁ = 0.676. TSTR = 0.641, **below the
+zero-dependency floor of 0.682.** Our synthetic data was a worse source of training data than
+independent noise.
+
+Post-hoc quantile calibration fixed W₁ (0.676 → 0.0004) and made TSTR **worse** (0.641 → 0.573).
+That is diagnostic, not paradoxical: once the features were on the right scale the classifier
+actually *used* them, and they carried the wrong conditional information. The critic cannot see how
+a feature's distribution **shifts with c** either — and the shift of a lab value with the mortality
+label **is** the mortality signal. A pooled calibration cannot restore a conditional.
+
+#### The fix: a strictly 1-D conditional marginal term
+
+```
+L_G  =  −E[ D(soft_npn(x̃), c) ]   +   λ · L_marginal(x̃, x, c)
+        \______________________/       \____________________/
+         cross-feature dependency       1-D conditional shape
+         ONLY γ can supply this         ONLY the heads can supply this
+```
+
+`L_marginal` matches, per feature and per stratum of `y`, a 32-point quantile grid of x̃_u against
+x_u. It reads **one feature column at a time**.
+
+**This does not violate v2 §8.10, and the reason is Proposition D-2 itself.** §8.10 bans putting
+*dependency structure* into the objective. A strictly 1-D term is not dependency structure — by
+exactly the argument that says the ~2,000 head parameters cannot manufacture a dependence.
+`model_v3.assert_marginal_loss_is_1d` verifies it structurally: the Jacobian ∂L_u/∂x̃_v is diagonal,
+**off-diagonal max = 0.0e+00**.
+
+#### The falsifier, and it held
+
+If the marginal term were smuggling dependency in, a zero-RZZ model would start beating the
+dependency floor. Measured (Δ=4, 8,000 steps, λ=10):
+
+| model | dep. error | TSTR AUROC | marginal W₁ |
+|---|---|---|---|
+| **CDG (Δ=4)** | **0.0768** | **0.7856** | 0.1165 |
+| permuted | 0.0898 | 0.7738 | 0.1236 |
+| **no_entangle** | **0.0980** | 0.7710 | 0.1312 |
+| *dependency floor* | *0.0981* | — | — |
+
+**`no_entangle` lands on 0.0980 against a floor of 0.0981.** With the marginal term switched on and
+8,000 steps of training, a model with no entangling gates still creates *no* conditional dependency
+whatsoever. §8.10 holds. All cross-feature structure still comes from γ alone.
+
+And the topology ordering survives: CDG 0.0768 < permuted 0.0898 < no_entangle 0.0980.
+
+#### The head learning rate was a fossil
+
+λ=10 with **lr_g = 1e-3**. The old lr_g was **5e-5** — chosen back when *nothing* trained the heads
+on the marginals, so it never mattered. The moment the heads became the only thing that could fix a
+marginal, it was far too small to move them:
+
+| λ | lr_g | dep | TSTR | W₁ |
+|---|---|---|---|---|
+| 1 | 5e-5 *(the old defaults)* | 0.1202 | 0.5687 | 1.1633 |
+| 3 | 1e-3 | 0.0851 | 0.6901 | 0.1787 |
+| **10** | **1e-3** | 0.0871 | **0.7516** | **0.1419** |
+| 10 | 3e-3 | 0.0875 | 0.7651 | 0.1961 |
+| 30 | 3e-3 | 0.0898 | 0.6949 | 0.1773 |
+
+(2,000 steps, Δ=4, 1 seed.) A hyperparameter that is harmless while a term is absent from the loss
+becomes load-bearing the moment it is added — and nobody re-tunes it, because it "was already
+tuned".
+
+Unexpected: fixing the marginals **improved the dependency too** (0.1202 → 0.0871). A head emitting
+sane values apparently lets the critic see a cleaner copula. The two terms help each other.
+
+#### Where v3 lands
+
+| | dep. error | TSTR AUROC | W₁ |
+|---|---|---|---|
+| real data (ceiling) | — | 0.8569 | — |
+| gaussian copula (**oracle** for the dep. column) | 0.0064 | 0.8073 | 0.0070 |
+| **CDG-QGAN v3 (Δ=4)** | **0.0768** | **0.7856** | 0.1165 |
+| TVAE | 0.0708 | 0.7736 | 0.1938 |
+| CTGAN | 0.0935 | 0.6999 | 0.1724 |
+| independent (floor) | 0.0990 | 0.6823 | 0.0065 |
+| ~~v2~~ | ~~0.0748~~ | ~~0.6412~~ | ~~0.6759~~ |
+
+**We now beat TVAE on TSTR** (0.7856 vs 0.7736) with 29 entangling angles against ~10⁶ parameters.
+
+#### The finding we would rather not have, and will report anyway
+
+**`no_entangle` scores TSTR 0.7710.** The CDG scores 0.7856. **The entire cross-feature dependency
+structure — the whole subject of this paper — is worth +0.015 AUROC on the downstream task**, while
+it is worth 22% on the dependency metric (0.0768 vs 0.0980).
+
+Almost all of the downstream utility lives in the *conditional marginals*, not in the copula. In-ICU
+mortality, at least as an XGBoost problem on 16 features, barely needs the cross-feature dependency
+structure at all.
+
+That has to be said in the abstract, not buried: the alignment effect is large and real **on the
+dependency structure**, and it is small **on this particular downstream task**. A paper that reports
+only the first number is selling something.
+
 ### E-5. A bug caught along the way: `no_entangle` falls back to the full statevector
 
 Because of the `lightcone and len(edges)` guard in `model.py`, a graph with zero edges could not

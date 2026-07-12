@@ -67,8 +67,8 @@ import torch
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).parent))
 
-from diag_fix2 import Cfg, train_fix2  # noqa: E402
 from eval_dep import dep_error, fisher_z, partial_corr_c  # noqa: E402
+from train_v3 import CfgV3, train_v3  # noqa: E402
 from features import CORE16  # noqa: E402
 from graphs import degree_preserving_rewire, distance_matched_permuted, isomorphic_permuted, ring_with_chords  # noqa: E402
 from paths import PROCESSED, RESULTS  # noqa: E402
@@ -109,6 +109,15 @@ def main() -> None:
                          "at 256 the CDG-permuted effect shrinks to a third. REVISIONS E-8.")
     ap.add_argument("--depth", type=int, default=1, help="L. 1 = confirmatory; 2 = negative control")
     ap.add_argument("--n-syn", type=int, default=20000)
+    # v3 loss (REVISIONS §E-10). The copula critic supplies the dependency; a strictly 1-D
+    # conditional marginal term supplies the shape. Without it the marginals are wrong by two
+    # orders of magnitude (W1 0.68) and TSTR falls BELOW the zero-dependency floor.
+    ap.add_argument("--lambda-marg", type=float, default=10.0)
+    ap.add_argument("--lr-g", type=float, default=1e-3,
+                    help="head lr. 5e-5 was set when nothing trained the heads on the marginals; "
+                         "it is far too small now that they must.")
+    ap.add_argument("--cdg", type=str, default="cdg_d4.npz",
+                    help="cdg.npz = Δ3 (v2 §7.6's degree cap); cdg_d4.npz = Δ4, the redesign")
     # Sharding. One run is ~30 min at 8000x512, and the full design is 10 variants x 10 seeds =
     # 100 runs = ~50 h serial. These runs leave the GPU mostly idle (light-cone subcircuits, small
     # batches), so 3 concurrent shards cost ~1.7x each in wall-clock and win ~1.8x in throughput.
@@ -124,7 +133,7 @@ def main() -> None:
     C = df[["y", "age", "sex", "icu_type"]].to_numpy(float)
     X = (X - X.mean(0)) / (X.std(0) + 1e-8)
 
-    z = np.load(PROCESSED / "cdg.npz", allow_pickle=True)
+    z = np.load(PROCESSED / args.cdg, allow_pickle=True)
     G_cdg = nx.Graph()
     G_cdg.add_nodes_from(range(N_FEAT))
     G_cdg.add_edges_from([tuple(e) for e in z["E_fit"]])
@@ -150,18 +159,19 @@ def main() -> None:
             if i % args.nshards == args.shard}
 
     print("=" * 92)
-    print(f"WP-2 confirmatory experiment — real MIMIC-IV · L={args.depth} · "
+    print(f"WP-2 confirmatory experiment — real MIMIC-IV · L={args.depth} · {args.cdg} · "
           f"{args.seeds} seeds · {args.steps} steps · batch {args.batch}")
     if args.nshards > 1:
         print(f"  shard {args.shard + 1}/{args.nshards}: {', '.join(mine)}")
     print("=" * 92)
     print(f"  cohort : n={len(df):,}  ·  CDG {G_cdg.number_of_edges()} edges  "
           f"max degree {max(dict(G_cdg.degree()).values())}  diameter {nx.diameter(G_cdg)}")
-    print(f"  critic : copula + batch-aware   ·   loss: pure WGAN-GP, no dependency term")
+    print(f"  loss   : copula+batch-aware critic (dependency)  +  λ={args.lambda_marg} × "
+          f"1-D conditional marginal term (shape)")
+    print(f"           the marginal term's Jacobian is diagonal (model_v3), so it cannot create")
+    print(f"           cross-feature dependence. v2 §8.10 holds. lr_g={args.lr_g}")
     print(f"  metric : conditional partial correlation over all 120 pairs (eval_dep)")
     print(f"  floor  : {floor:.4f}   <- a model that creates no dependency at all")
-    print(f"  ceiling: 0.0437         <- reachable without a GAN (RESULTS_ceiling_real.md)")
-    print(f"  bound  : 0.0331         <- no L=1 CDG circuit can beat this (Corollary 1)")
     if args.depth != 1:
         print(f"\n  ** L={args.depth} is a NEGATIVE CONTROL. The effect is expected to vanish. **")
     print()
@@ -174,22 +184,40 @@ def main() -> None:
     RESULTS.mkdir(exist_ok=True)
     out = RESULTS / (f"wp2_L{args.depth}.json" if args.nshards == 1
                      else f"wp2_L{args.depth}_shard{args.shard}.json")
-    res = json.loads(out.read_text())["results"] if out.exists() else {}
-    if res:
-        print(f"  resuming: {', '.join(res)} already done\n")
+
+    # The config this run is producing. A resumed file is only usable if it was produced by the
+    # SAME one — otherwise we would silently mix Δ=3 rows into a Δ=4 table, or v2-loss rows into a
+    # v3 table, and the mixture would be invisible in the output. That nearly happened: the first
+    # v3 smoke run cheerfully "resumed" three variants left over from the Δ=3 / v2 / 4-shard run.
+    cfgkey = {"cdg": args.cdg, "depth": args.depth, "steps": args.steps, "batch": args.batch,
+              "seeds": args.seeds, "lambda_marg": args.lambda_marg, "lr_g": args.lr_g,
+              "nshards": args.nshards, "shard": args.shard, "loss": "v3"}
+    res = {}
+    if out.exists():
+        prev = json.loads(out.read_text())
+        if prev.get("config") == cfgkey:
+            res = prev["results"]
+            if res:
+                print(f"  resuming: {', '.join(res)} already done\n")
+        else:
+            stale = out.with_suffix(".json.stale")
+            out.replace(stale)
+            print(f"  ** the existing {out.name} was produced by a DIFFERENT configuration.")
+            print(f"     moved to {stale.name}; starting clean. **\n")
 
     def save():
-        out.write_text(json.dumps({"floor": floor, "results": res, "seeds": args.seeds,
-                                   "steps": args.steps, "batch": args.batch}, indent=2))
+        out.write_text(json.dumps({"config": cfgkey, "floor": floor, "results": res,
+                                   "seeds": args.seeds, "steps": args.steps,
+                                   "batch": args.batch}, indent=2))
 
     for name, Gv in mine.items():
         if name in res:
             continue
         rows, t0 = [], time.time()
         for s in range(args.seeds):
-            cfg = Cfg(steps=args.steps, batch=args.batch, seed=s,
-                      copula=True, batch_critic=True, lr_q=5e-3)
-            Gm = train_fix2(X, C, list(Gv.edges()), cfg)
+            cfg = CfgV3(steps=args.steps, batch=args.batch, seed=s,
+                        lambda_marg=args.lambda_marg, lr_g=args.lr_g)
+            Gm = train_v3(X, C, list(Gv.edges()), cfg)
             Xs, Cs = generate(Gm, C, args.n_syn, s)
             rows.append(score(Xs, Cs))
         res[name] = rows

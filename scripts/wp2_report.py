@@ -48,13 +48,31 @@ def main() -> None:
     if not files:
         sys.exit(f"no WP-2 result files for L={args.depth} in {RESULTS}")
 
-    res, floor, steps, batch, seeds = {}, [], None, None, None
+    # Every shard must have been produced by the same configuration, apart from its shard index.
+    # Mixing a Δ=3 shard into a Δ=4 table, or a v2-loss shard into a v3 table, would be invisible
+    # in the output and would corrupt every contrast below. Refuse rather than average.
+    res, floor, cfgs = {}, [], []
     for f in files:
         d = json.loads(f.read_text())
+        c = dict(d.get("config") or {})
+        c.pop("shard", None)
+        cfgs.append((f.name, c))
         res.update(d["results"])
         floor.append(d["floor"])
-        steps, batch, seeds = d["steps"], d.get("batch"), d["seeds"]
+
+    if any(not c for _, c in cfgs):
+        sys.exit("a result file has no `config` block — it predates the config check.\n"
+                 "  Delete it and re-run that shard. Refusing to guess what produced it.")
+    base = cfgs[0][1]
+    for name, c in cfgs[1:]:
+        if c != base:
+            diff = {k: (base.get(k), c.get(k)) for k in set(base) | set(c)
+                    if base.get(k) != c.get(k)}
+            sys.exit(f"shards disagree on their configuration — refusing to aggregate.\n"
+                     f"  {cfgs[0][0]} vs {name}: {diff}")
+
     floor = float(np.mean(floor))
+    steps, batch, seeds = base["steps"], base["batch"], base["seeds"]
 
     missing = [v for v in EXPECTED if v not in res]
     if missing:
