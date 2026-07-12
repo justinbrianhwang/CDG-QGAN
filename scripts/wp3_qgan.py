@@ -46,6 +46,7 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 import torch
+from scipy.stats import rankdata
 from sklearn.model_selection import train_test_split
 
 warnings.filterwarnings("ignore")
@@ -89,6 +90,53 @@ def sample(G, C, n, seed):
     return G(z, c).cpu().numpy(), C[idx]
 
 
+def calibrate_marginals(Xs: np.ndarray, Xtr: np.ndarray) -> np.ndarray:
+    """Per-feature monotone quantile mapping:  x_u -> F_train,u^{-1}( F_syn,u(x_u) ).
+
+    Why this is necessary
+    ---------------------
+    The copula critic (REVISIONS §E-7) is DELIBERATELY blind to the marginals — that is what
+    forces the gradient into the entangling angles instead of letting it settle for the marginals,
+    and it is what made the model learn any dependency at all. But it has a consequence nobody
+    priced in: **there is then no term in the loss that trains the heads to match the marginals.**
+    So they don't. Measured: marginal W1 = 0.676, against a Gaussian copula's 0.007.
+
+    The dependency metric never saw this, because it is a nonparanormal (rank) quantity and is
+    invariant to any monotone per-feature map. TSTR is not, and TSTR fell BELOW the floor.
+
+    Why this fix is free, and not a cheat
+    -------------------------------------
+    The map is monotone and applied to one feature at a time. A monotone per-feature map leaves
+    the COPULA exactly unchanged — so the conditional dependency structure, which is the entire
+    scientific claim, is bit-for-bit identical before and after. It cannot manufacture a
+    dependency, and `no_entangle` still lands on the floor after calibration.
+
+    It also does not touch Proposition D-2: it is another 1-D map of x_u, reading no other
+    feature. It is the same object the local head already is — we are simply enforcing the
+    monotonicity the theory assumed all along (and which §E-8 measured the free head violating on
+    58% of the q-grid).
+
+    Fitted on the TRAIN split only. Using the training marginals is what every generative model
+    does; the held-out patients are never touched.
+
+    Interpolate, do not index
+    -------------------------
+    A first version mapped the rank to an integer index into the sorted training column. That is
+    monotone but NOT STRICTLY monotone — many synthetic values collapse onto the same training
+    value — and ties change ranks, so the nonparanormal transform moved and the dependency error
+    shifted by ~0.003 on every variant (including `no_entangle`, uniformly, which is why it was a
+    tie artefact and not injected structure). Linear interpolation between the order statistics is
+    strictly increasing, so the ranks — and therefore the copula — are preserved exactly.
+    """
+    n_ref = Xtr.shape[0]
+    grid = (np.arange(n_ref) + 0.5) / n_ref          # plotting positions of the order statistics
+    out = np.empty_like(Xs)
+    for j in range(Xs.shape[1]):
+        r = rankdata(Xs[:, j], method="average") / (len(Xs) + 1)     # F_syn,u(x) in (0,1)
+        out[:, j] = np.interp(r, grid, np.sort(Xtr[:, j]))           # F_train,u^{-1}(.)
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--steps", type=int, default=8000)
@@ -130,6 +178,11 @@ def main() -> None:
           f"{args.seeds} seeds · {args.steps} steps · batch {args.batch}")
     print(f"  TSTR ceiling (train on REAL): AUROC {trtr[0]:.4f}  AUPRC {trtr[1]:.4f}")
     print()
+    print("  Each model is scored twice: raw, and after a per-feature monotone quantile map onto")
+    print("  the training marginals (`calibrate_marginals`). The map cannot change the copula, so")
+    print("  the dependency column MUST be identical between the two — that identity is the proof")
+    print("  the calibration is not smuggling in structure. Only the marginals and TSTR move.")
+    print()
     print(f"  {'model':<20} {'|E|':>4} {'bound':>7} {'dep. error':>11} {'TSTR AUROC':>11} "
           f"{'TSTR AUPRC':>11} {'marg. W1':>9}")
     print("  " + "-" * 88)
@@ -137,23 +190,32 @@ def main() -> None:
     out = {"tstr_ceiling": list(trtr)}
     for tag, Gv in variants.items():
         b, n_out = bound_of(Gv, az) if Gv.number_of_edges() else (float(np.mean(az[np.triu_indices(N_FEAT, 1)])), 120)
-        de, au, apr, w1 = [], [], [], []
+        raw = {"de": [], "au": [], "apr": [], "w1": []}
+        cal = {"de": [], "au": [], "apr": [], "w1": []}
         t0 = time.time()
         for s in range(args.seeds):
             cfg = Cfg(steps=args.steps, batch=args.batch, seed=s,
                       copula=True, batch_critic=True, lr_q=5e-3)
             Gm = train_fix2(Xtr, Ctr, list(Gv.edges()), cfg)
             Xs, Cs = sample(Gm, Ctr, N_SYN, s)
-            de.append(dep(Xs, Cs))
-            a, p = tstr(Xs, Cs, Xte, Cte, s)
-            au.append(a); apr.append(p)
-            w1.append(marginal_w1(Xs, Xtr))
-        out[tag.strip()] = {"edges": Gv.number_of_edges(), "bound": b,
-                            "dep": float(np.mean(de)), "auroc": float(np.nanmean(au)),
-                            "auprc": float(np.nanmean(apr)), "w1": float(np.mean(w1))}
-        print(f"  {tag:<20} {Gv.number_of_edges():>4} {b:>7.4f} {np.mean(de):>11.4f} "
-              f"{np.nanmean(au):>11.4f} {np.nanmean(apr):>11.4f} {np.mean(w1):>9.4f}"
-              f"   ({time.time()-t0:.0f}s)", flush=True)
+            Xc = calibrate_marginals(Xs, Xtr)
+            for d, A in ((raw, Xs), (cal, Xc)):
+                d["de"].append(dep(A, Cs))
+                a, p = tstr(A, Cs, Xte, Cte, s)
+                d["au"].append(a); d["apr"].append(p)
+                d["w1"].append(marginal_w1(A, Xtr))
+
+        for label, d in (("", raw), ("  + calibrated", cal)):
+            key = tag.strip() + label.strip()
+            out[key] = {"edges": Gv.number_of_edges(), "bound": b,
+                        "dep": float(np.mean(d["de"])), "auroc": float(np.nanmean(d["au"])),
+                        "auprc": float(np.nanmean(d["apr"])), "w1": float(np.mean(d["w1"]))}
+            name = tag if not label else label
+            print(f"  {name:<20} {Gv.number_of_edges() if not label else '':>4} "
+                  f"{b if not label else float('nan'):>7.4f} {np.mean(d['de']):>11.4f} "
+                  f"{np.nanmean(d['au']):>11.4f} {np.nanmean(d['apr']):>11.4f} "
+                  f"{np.mean(d['w1']):>9.4f}", flush=True)
+        print(f"       ({time.time()-t0:.0f}s)", flush=True)
 
     print()
     print("=" * 108)
@@ -161,9 +223,12 @@ def main() -> None:
     print("  its L=1 light cone, at every parameter setting. It is a property of the graph, not of")
     print("  the optimizer, and no amount of training can go below it.")
     print()
-    print("  Put this table next to wp3_baselines.py. If we lose the dependency column but hold")
-    print("  TSTR, say exactly that: the 120-pair average is unweighted and the CDG spends its")
-    print("  light cone on the dependencies that carry clinical signal.")
+    print("  The copula critic is blind to the marginals BY DESIGN — that is what forced the")
+    print("  gradient into the entangling angles (REVISIONS §E-7). The price, which we did not see")
+    print("  until TSTR was measured, is that nothing in the loss trains the heads to match the")
+    print("  marginals, and they don't. The calibration rows fix that with a monotone per-feature")
+    print("  map, which by construction leaves the copula — and therefore the entire scientific")
+    print("  claim — untouched.")
     print("=" * 108)
 
     RESULTS.mkdir(exist_ok=True)

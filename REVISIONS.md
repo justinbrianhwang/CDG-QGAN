@@ -804,6 +804,84 @@ effect is the paper.
 we lose to CTGAN/TVAE, and what happens to downstream utility (TSTR), is WP-3 — and that is what
 decides whether this architecture has a performance argument at all.
 
+### E-10. The copula critic broke the marginals, and our metric could not see it
+
+WP-3 measured TSTR (train on synthetic, test on 12,141 held-out **real** patients) for the first
+time. The result:
+
+| | dep. error | **TSTR AUROC** | **marginal W₁** |
+|---|---|---|---|
+| gaussian copula | 0.0064 | 0.8073 | **0.0070** |
+| TVAE | 0.0708 | 0.7736 | 0.1938 |
+| **CDG-QGAN Δ=3** | **0.0748** | **0.6412** | **0.6759** |
+| *independent (floor)* | *0.0990* | *0.6823* | *0.0065* |
+
+**Our TSTR is BELOW the floor.** A model that creates no dependency at all is a more useful source
+of synthetic training data than ours. The cause is in the last column: marginal W₁ = 0.676, a
+hundred times the copula's 0.007.
+
+#### It is the direct, foreseeable price of the §E-7 fix
+
+The copula critic rank-transforms its input **by design** — that is what destroys the marginal
+information, which is what forces the gradient into the entangling angles, which is what made the
+model learn any dependency at all. But it means **there is no term anywhere in the loss that trains
+the heads to match the marginals.** So they don't.
+
+And our dependency metric is a **nonparanormal (rank) quantity**, invariant to any monotone
+per-feature map. It cannot see a broken marginal. It never could. We scored 0.0714 — beating
+CTGAN — while emitting values whose distributions were wrong by two orders of magnitude, and every
+number in this repository was blind to it.
+
+> **A failure your metric cannot see is not a failure that isn't there.** We built a metric that
+> deliberately ignores the marginals, then optimized against a critic that deliberately ignores the
+> marginals, and were surprised that the marginals were ignored.
+
+This is the **fourth** time a fix moved the problem instead of removing it (§E-7 critic, §E-8's two
+refuted mechanisms, §E-9's optimizer budget). The pattern is now the finding: *every time we added
+an evaluation axis, it exposed a defect the previous axes were structurally incapable of seeing.*
+
+#### The fix: monotone quantile calibration, and its honest limits
+
+`wp3_qgan.calibrate_marginals`: `x_u → F̂_train,u⁻¹( F̂_syn,u(x_u) )`, per feature, fitted on the
+training split only.
+
+It is legitimate, and not a cheat, for a reason internal to the architecture: it is **another 1-D
+map of x_u that reads no other feature**, exactly what the local head already is. Proposition D-2 is
+untouched. It is the monotonicity the theory assumed all along — and which §E-8 measured the free
+head violating on 58% of the q-grid.
+
+Measured (200-step smoke, so the models are noise; only the *properties of the map* are being
+checked):
+
+| | dep. error | after calibration | marginal W₁ | after |
+|---|---|---|---|---|
+| CDG Δ=3 | 0.1298 | 0.1275 | 4.18 | **0.0004** |
+| CDG Δ=4 | 0.1293 | 0.1270 | 4.21 | 0.0004 |
+| permuted | 0.1296 | 0.1273 | 4.19 | 0.0004 |
+| **no_entangle** | 0.1284 | **0.1261** | 4.18 | 0.0004 |
+
+Marginals: fixed, by four orders of magnitude.
+
+**Dependency: NOT bit-for-bit identical, and the first version of this section claimed it would
+be. That claim is withdrawn.** A monotone map preserves ranks only if it is *strictly* monotone.
+Real MIMIC features are discrete (spo₂ and heart rate are integers; labs are rounded), so the sorted
+training column has long plateaus, and mapping onto it creates ties **no matter how the inverse CDF
+is implemented** — interpolating between order statistics instead of indexing into them does not
+help. Ties change ranks, and the rank-based metric moves by ≈ 0.002.
+
+That residual is **not** injected structure, and the control proves it: the shift is uniform across
+every variant (−0.0023, −0.0023, −0.0023, −0.0023) **including `no_entangle`, which has no RZZ gates
+and can create no dependency at all**. A calibration that manufactured dependency would have to move
+that row differently from the others. It does not.
+
+If anything the calibrated numbers are the *more* honest ones: the target `z_real` is estimated from
+real data, which **has** those ties. Uncalibrated synthetic output is continuous — a different kind
+of object from the thing it is being compared to.
+
+The claim in the paper is therefore: **the copula is preserved up to the tie structure induced by
+the discreteness of the real marginals; the effect is uniform across all topologies, including the
+zero-entanglement control, and so cannot be a source of dependency.**
+
 ### E-5. A bug caught along the way: `no_entangle` falls back to the full statevector
 
 Because of the `lightcone and len(edges)` guard in `model.py`, a graph with zero edges could not
