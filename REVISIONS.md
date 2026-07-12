@@ -697,6 +697,113 @@ The only thing that caught it was **scoring a model that creates no dependency a
 noticing that the trained model lost to it. That check costs nothing and it has now fired twice on
 this project, correctly both times. It is the single most valuable line of code in the repository.
 
+### E-9. We lose to a Gaussian copula — and the fix was a hyperparameter we had invented
+
+Every comparison up to here was **internal** (CDG vs permuted vs distance-matched vs no_entangle):
+the same circuit with the edges moved. They show that *where* the entanglement goes matters. They
+never showed the model was any good, because no classical generator had been run against the metric.
+
+`scripts/baseline_classical.py` ran one. It was brutal:
+
+| model | 120-pair error |
+|---|---|
+| empirical resample (oracle) | 0.0055 |
+| **Gaussian copula (classical)** | **0.0060** |
+| CDG-QGAN Δ=3, trained | 0.0694 |
+| CDG-QGAN Δ=3, ceiling (no GAN) | 0.0436 |
+| **CDG-QGAN Δ=3, Corollary 1 bound** | **0.0331** |
+
+**11.6× worse, and bounded away by a theorem.** At Δ=3, 72 of the 120 pairs are outside the L=1
+light cone and are forced to exactly zero, so 0.0331 is unreachable *for any parameter setting*.
+
+First, an admission that has to be in the paper: **the Gaussian copula is the ORACLE for this
+metric, not a rival.** Our metric is a partial correlation in nonparanormal space — a copula
+quantity. A Gaussian copula fits precisely that and lands within 0.0005 of the empirical resample.
+No generative model beats it here. The real baselines are CTGAN/TVAE and downstream utility (WP-3).
+
+#### Depth is the wrong lever, and exactly so
+
+| L | pairs in cone | bound | alignment z |
+|---|---|---|---|
+| 1 | 48/120 | 0.0331 | **+3.79** |
+| 2 | 103/120 | 0.0068 | +1.41 |
+| 3 | 120/120 | 0.0000 | 0.00 |
+
+Depth widens the cone for **every** graph equally. At L=3 a permutation reaches every pair too, the
+CDG and its own null become the same object, and the hypothesis evaporates. Depth buys expressivity
+by selling the thing we set out to measure.
+
+#### Density is the right lever — and the cap was ours, not the data's
+
+The L=1 reach radius is 2. For 16 nodes, every pair fits within distance 2 of a graph of **maximum
+degree 4** (Moore: `d²+1 ≥ 16`). v2 §7.6 capped the degree at **3**. That cap is a design decision
+we wrote down, not a property of MIMIC. Raising it lets the degree-constrained Kruskal keep adding
+edges **in weight order** — the next strongest partial correlations. **L stays 1. Corollary 1 and
+Proposition D-2 are untouched.**
+
+| Δ | \|E\| | bound | alignment z | percentile |
+|---|---|---|---|---|
+| 3 (v2) | 21 | 0.0331 | +3.38 | 100.0% |
+| **4** | **29** | **0.0140** | **+2.51** | 100.0% |
+| 5 | 34 | 0.0089 | +2.08 | 99.9% |
+| 6 | 40 | 0.0057 | +1.70 | 99.5% |
+
+At equal bound, density beats depth on **both** axes (Δ=6: bound 0.0057, z=+1.70 vs L=2: bound
+0.0068, z=+1.41) — and it keeps the cone tight, which depth cannot.
+
+#### A third plausible mechanism, a third refutation
+
+At the original optimizer budget (1200 steps × 2 restarts) Δ=4 looked like a **failure**: the bound
+halved (0.0331 → 0.0140) but the achieved ceiling barely moved (0.0437 → 0.0418). I wrote down the
+natural explanation — the bottleneck had moved off the light cone and onto the circuit's own
+capacity, since a degree-4 qubit cannot set four correlations independently — and concluded that
+density was a dead end.
+
+**Wrong again.** Give both graphs 4× the optimizer:
+
+| | bound | ceiling @1200×2 | **ceiling @4000×4** | @6000×5 |
+|---|---|---|---|---|
+| Δ=3 | 0.0331 | 0.0437 | **0.0436** | 0.0435 |
+| Δ=4 | 0.0140 | 0.0418 | **0.0300** | — |
+
+Δ=3 is **converged** — 4× the budget moves it by 0.0001, 5× by 0.0002. Δ=4 gains **28%**, beats Δ=3
+by **31%**, and is still not converged. The extra edges were never useless: they made the problem
+**harder**, and a fixed budget was hiding the gain.
+
+> **The lesson, which outlives this paper: when you enrich a model and it does not improve, check
+> that you gave the optimizer more, not the same. A fixed budget silently penalizes the richer
+> model, and the result looks exactly like a capacity limit.**
+
+That is now **three** plausible mechanisms I proposed and the experiments refuted — folding heads
+(§E-8), a critic/metric space mismatch (§E-8), and a per-qubit capacity limit (here). Each was
+physically reasonable. Each was wrong. The pattern is worth naming: *a mechanism that explains the
+symptom is not thereby the cause*, and on this project the cheap control (score the do-nothing
+model; give both arms the same budget) has beaten the clever hypothesis every single time.
+
+#### Density is not free, and the decisive control says so
+
+More edges → a *random permutation* also reaches more pairs by luck, so the isomorphic-permutation
+contrast shrinks (Δ=3: −0.0196 → Δ=4: −0.0135). But the **distance-matched** contrast — the one that
+isolates the clinical claim from graph combinatorics — holds (−0.0262 → −0.0275, at the 1200×2
+budget; the fair run is in progress).
+
+One number is worth the paper's abstract:
+
+> **Δ=4 permuted = 0.0435 ≈ Δ=3 aligned = 0.0436.**
+> A denser but wrongly-labelled graph, given 38% more entangling gates, only just catches up to the
+> correct sparse one.
+
+#### Where the design lands
+
+**Δ=4**: bound 0.0331→0.0140, ceiling 0.0436→0.0300, z=+2.51 at the 100th percentile, max degree 4,
+L=1, Corollary 1 and D-2 intact, 29 RZZ angles against the copula's 120 covariances. We do **not**
+chase Δ=6: it buys 0.0083 of ceiling and sells a third of the alignment effect, and the alignment
+effect is the paper.
+
+**We still expect to lose the dependency column to a Gaussian copula, and we will say so.** Whether
+we lose to CTGAN/TVAE, and what happens to downstream utility (TSTR), is WP-3 — and that is what
+decides whether this architecture has a performance argument at all.
+
 ### E-5. A bug caught along the way: `no_entangle` falls back to the full statevector
 
 Because of the `lightcone and len(edges)` guard in `model.py`, a graph with zero edges could not

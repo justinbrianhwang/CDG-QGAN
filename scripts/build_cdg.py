@@ -206,7 +206,7 @@ def report_holdout_distances(G: nx.Graph, E_holdout: list, names: list[str], rho
             print(f"    L={L} (reach radius {2*L}): {n_in}/{len(arr)} pairs are expressible")
 
 
-def main(path: Path, alpha: float) -> None:
+def main(path: Path, alpha: float, out_name: str = "cdg.npz") -> None:
     df = pd.read_parquet(path)
     names = [f.name for f in CORE16]
     df = df.dropna(subset=names + CONDITION_VARS[1:])
@@ -240,10 +240,10 @@ def main(path: Path, alpha: float) -> None:
 
     import paths
 
-    out = paths.PROCESSED / "cdg.npz"
+    out = paths.PROCESSED / out_name
     np.savez(out, rho=rho, stab=stab, E_fit=np.array(E_fit), E_holdout=np.array(E_hold),
-             names=np.array(names))
-    print(f"\n  saved: {out}")
+             names=np.array(names), max_degree=MAX_DEGREE)
+    print(f"\n  saved: {out}   (max degree {MAX_DEGREE})")
 
 
 if __name__ == "__main__":
@@ -253,6 +253,16 @@ if __name__ == "__main__":
     ap.add_argument("--data", type=Path, default=None)
     ap.add_argument("--demo", action="store_true")
     ap.add_argument("--alpha", type=float, default=0.05)
+    # v2 §7.6 capped the degree at 3. That cap, not the data, is what forces 72 of the 120 pairs
+    # outside the L=1 light cone and puts a floor of 0.0331 under the model — 5x worse than a
+    # Gaussian copula. Raising it lets the degree-constrained Kruskal keep adding edges in weight
+    # order (the next strongest partial correlations), which lowers the bound while keeping L=1,
+    # and with it Corollary 1 and Proposition D-2. See `scripts/design_sweep.py`.
+    ap.add_argument("--max-degree", type=int, default=3)
+    ap.add_argument("--out", type=str, default=None,
+                    help="output filename under PROCESSED (default: cdg.npz, or cdg_d<Δ>.npz)")
     a = ap.parse_args()
     data = a.data or paths.PROCESSED / ("cohort_demo.parquet" if a.demo else "cohort_v31.parquet")
-    main(data, a.alpha)
+    MAX_DEGREE = a.max_degree
+    out_name = a.out or ("cdg.npz" if a.max_degree == 3 else f"cdg_d{a.max_degree}.npz")
+    main(data, a.alpha, out_name)

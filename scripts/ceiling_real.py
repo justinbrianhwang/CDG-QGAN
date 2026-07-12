@@ -52,7 +52,7 @@ from paths import PROCESSED, RESULTS  # noqa: E402
 from train import DEVICE  # noqa: E402
 
 N_FEAT = 16
-STEPS = 1200
+STEPS = 1200          # overridable: a denser graph is a harder optimization problem
 BATCH = 2048          # soft_npn is O(B^2 n); 2048 keeps it under ~300 MB
 RESTARTS = 2
 EVAL_EVERY = 50
@@ -117,6 +117,19 @@ def fit(edges, target_z: torch.Tensor, Ct: torch.Tensor, seed: int, iu) -> float
 
 
 def main() -> None:
+    global STEPS, RESTARTS
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--cdg", type=str, default="cdg.npz",
+                    help="which CDG to wire the circuit on (cdg.npz = Δ3, cdg_d4.npz = Δ4, ...)")
+    ap.add_argument("--steps", type=int, default=STEPS)
+    ap.add_argument("--restarts", type=int, default=RESTARTS)
+    ap.add_argument("--only", type=str, default=None,
+                    help="comma-separated variant names, e.g. 'aligned (CDG)' — for capacity probes")
+    args = ap.parse_args()
+
+    STEPS, RESTARTS = args.steps, args.restarts
+
     names = [f.name for f in CORE16]
     df = pd.read_parquet(PROCESSED / "cohort_v31.parquet").dropna(
         subset=names + ["age", "sex", "icu_type"])
@@ -124,7 +137,7 @@ def main() -> None:
     C = df[["y", "age", "sex", "icu_type"]].to_numpy(float)
     X = (X - X.mean(0)) / (X.std(0) + 1e-8)
 
-    zz = np.load(PROCESSED / "cdg.npz", allow_pickle=True)
+    zz = np.load(PROCESSED / args.cdg, allow_pickle=True)
     G = nx.Graph()
     G.add_nodes_from(range(N_FEAT))
     G.add_edges_from([tuple(e) for e in zz["E_fit"]])
@@ -149,11 +162,16 @@ def main() -> None:
         "rewired": degree_preserving_rewire(G, gr),
         "no_entangle": nx.empty_graph(N_FEAT),
     }
+    if args.only:
+        keep = [s.strip() for s in args.only.split(",")]
+        variants = {k: v for k, v in variants.items() if k in keep}
 
     print("=" * 86)
     print("Joint expressivity ceiling on REAL MIMIC-IV — direct optimization, no GAN")
     print("=" * 86)
-    print(f"  n = {len(df):,}   ·   CDG {G.number_of_edges()} edges   ·   L=1")
+    print(f"  n = {len(df):,}   ·   {args.cdg}: {G.number_of_edges()} edges, "
+          f"max degree {max(dict(G.degree()).values())}   ·   L=1")
+    print(f"  Gaussian copula (classical baseline) = 0.0060 — the number that has to be beaten")
     print(f"  floor       = {floor:.4f}   a model that creates no dependency at all")
     print(f"  irreducible = {irreducible:.4f}   the error ANY L=1 CDG circuit must pay on the")
     print(f"                         {len(out_cone)} pairs outside its light cone (Corollary 1)")
@@ -172,24 +190,31 @@ def main() -> None:
     print()
     print("=" * 86)
     a = res["aligned (CDG)"]
+    print(f"  aligned sits {a - irreducible:+.4f} above the Corollary 1 bound.")
+    print("  That gap is what the CIRCUIT cannot express, as opposed to what the GRAPH forbids.")
+    print("  A gap that stays large as the graph gets denser means the bottleneck has moved off")
+    print("  the light cone and onto the circuit's own capacity — more edges would not help.")
+    print()
     for ref in list(variants)[1:]:
         d = a - res[ref]
         print(f"  aligned − {ref:<14} = {d:+.4f}   "
               f"{'aligned better' if d < 0 else 'ALIGNED WORSE'}")
-    print()
-    if a >= floor * 0.95:
-        print("  >> The circuit CANNOT represent the real pattern. Design flaw — WP-2 is moot.")
-    elif a < res["permuted"] - 0.002:
-        print("  >> Representable, and alignment helps. The hypothesis holds on real data;")
-        print("     the WP-2 smoke failure is a TRAINING problem, not a design problem.")
-    else:
-        print("  >> Representable, but alignment does not help. The premise of WP-2 collapses.")
+    if "permuted" in res:
+        print()
+        if a >= floor * 0.95:
+            print("  >> The circuit CANNOT represent the real pattern. Design flaw.")
+        elif a < res["permuted"] - 0.002:
+            print("  >> Representable, and alignment helps.")
+        else:
+            print("  >> Representable, but alignment does not help.")
     print("=" * 86)
 
     RESULTS.mkdir(exist_ok=True)
     import json
-    (RESULTS / "ceiling_real.json").write_text(
-        json.dumps({"floor": floor, "irreducible": irreducible, "results": res}, indent=2))
+    tag = Path(args.cdg).stem
+    (RESULTS / f"ceiling_real_{tag}.json").write_text(
+        json.dumps({"cdg": args.cdg, "edges": G.number_of_edges(), "floor": floor,
+                    "irreducible": irreducible, "results": res}, indent=2))
 
 
 if __name__ == "__main__":
