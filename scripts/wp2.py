@@ -168,8 +168,23 @@ def main() -> None:
     print(f"  {'variant':<18} {'|E|':>4} {'120-pair error':>16} {'vs floor':>10}")
     print("  " + "-" * 56)
 
-    res = {}
+    # Written after EVERY variant, not at the end. One variant is ~7 GPU-hours here; a shard that
+    # crashed on its last one used to take every earlier result down with it, unsaved. If the file
+    # already holds variants (a resumed shard), they are kept and skipped.
+    RESULTS.mkdir(exist_ok=True)
+    out = RESULTS / (f"wp2_L{args.depth}.json" if args.nshards == 1
+                     else f"wp2_L{args.depth}_shard{args.shard}.json")
+    res = json.loads(out.read_text())["results"] if out.exists() else {}
+    if res:
+        print(f"  resuming: {', '.join(res)} already done\n")
+
+    def save():
+        out.write_text(json.dumps({"floor": floor, "results": res, "seeds": args.seeds,
+                                   "steps": args.steps, "batch": args.batch}, indent=2))
+
     for name, Gv in mine.items():
+        if name in res:
+            continue
         rows, t0 = [], time.time()
         for s in range(args.seeds):
             cfg = Cfg(steps=args.steps, batch=args.batch, seed=s,
@@ -178,6 +193,7 @@ def main() -> None:
             Xs, Cs = generate(Gm, C, args.n_syn, s)
             rows.append(score(Xs, Cs))
         res[name] = rows
+        save()
         m, sd = float(np.mean(rows)), float(np.std(rows))
         print(f"  {name:<18} {Gv.number_of_edges():>4} {m:>10.4f} ± {sd:.4f} "
               f"{(m - floor) / floor * 100:>+9.1f}%   ({time.time()-t0:.0f}s)", flush=True)
@@ -186,11 +202,6 @@ def main() -> None:
     # interpret itself would be reading contrasts against controls it never ran. Aggregation,
     # the floor gate and the bootstrap all live in `wp2_report.py`, which refuses to run until
     # every variant is present.
-    RESULTS.mkdir(exist_ok=True)
-    out = RESULTS / (f"wp2_L{args.depth}.json" if args.nshards == 1
-                     else f"wp2_L{args.depth}_shard{args.shard}.json")
-    out.write_text(json.dumps({"floor": floor, "results": res, "seeds": args.seeds,
-                               "steps": args.steps, "batch": args.batch}, indent=2))
     print(f"\n  saved: {out}")
     if args.nshards > 1:
         print(f"  shard {args.shard + 1}/{args.nshards} done. "
