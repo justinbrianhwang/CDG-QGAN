@@ -32,8 +32,23 @@ EXPECTED = ["cdg", "permuted_0", "permuted_1", "permuted_2",
             "distmatched_0", "distmatched_1", "distmatched_2",
             "rewired", "ring", "no_entangle"]
 
-CEILING = 0.0437      # RESULTS_ceiling_real.md — reachable without a GAN
-BOUND = 0.0331        # Corollary 1 — no L=1 CDG circuit can beat this
+# These are properties of the GRAPH the run used, not of WP-2. They were the Δ=3 numbers and were
+# left behind when the architecture moved to Δ=4 (§E-9) — which silently made the "gap closed"
+# column wrong, because it is measured against the ceiling.
+CEILING = 0.0300      # RESULTS_design.md, Δ=4 @ 4000×4 — reachable with the GAN removed
+BOUND = 0.0140        # Corollary 1 — no L=1 Δ=4 circuit can beat this
+
+# The floor permutes the features AND c, so it destroys the x–c relation as well as the
+# cross-feature one. That was the right null for v2. It is the WRONG null for v3, whose 1-D
+# marginal term makes E[x_u | c] correct on purpose: the evaluator residualizes on a fixed basis
+# (1, c, c², c_a·c_b), whatever of E[x_u | c] lies outside that span survives, and — being a
+# function of c — it is shared across features, which a correlation estimator reports as
+# dependence. `zr` carries the same bias, so a model that fits the conditional marginals scores
+# BELOW the floor while creating no dependence at all. `null_condmarg.py` measures it: a surrogate
+# with exactly zero conditional cross-feature dependence scores 0.0942, 4.3% under the floor.
+#
+# Report both. The floor gates the run; the honest null is what a topology claim must beat.
+HONEST_NULL = 0.0942  # null_condmarg.py — zero dependency, correct conditional marginals
 
 
 def main() -> None:
@@ -83,22 +98,25 @@ def main() -> None:
     print("=" * 94)
     print(f"WP-2 — real MIMIC-IV · L={args.depth} · {seeds} seeds · {steps} steps · batch {batch}")
     print("=" * 94)
-    print(f"  floor   {floor:.4f}   a model that creates no dependency at all")
-    print(f"  ceiling {CEILING:.4f}   reachable with the GAN removed (RESULTS_ceiling_real.md)")
-    print(f"  bound   {BOUND:.4f}   no L=1 CDG circuit can beat this (Corollary 1)")
+    print(f"  floor       {floor:.4f}   zero dependency AND no x–c relation (gates the run)")
+    print(f"  honest null {HONEST_NULL:.4f}   zero dependency, correct conditional marginals "
+          f"(null_condmarg.py)")
+    print(f"  ceiling     {CEILING:.4f}   reachable with the GAN removed (RESULTS_design.md)")
+    print(f"  bound       {BOUND:.4f}   no L=1 Δ=4 circuit can beat this (Corollary 1)")
     print()
-    print(f"  {'variant':<16} {'120-pair error':>16} {'vs floor':>10} "
+    print(f"  {'variant':<16} {'120-pair error':>16} {'vs floor':>10} {'vs null':>9} "
           f"{'% of reachable gap closed':>27}")
-    print("  " + "-" * 74)
+    print("  " + "-" * 84)
 
     for name in EXPECTED:
         r = np.array(res[name])
         m, sd = r.mean(), r.std()
-        # how much of the distance between "do nothing" and "the best this circuit could do"
-        # has actually been closed
-        closed = (floor - m) / (floor - CEILING) * 100
+        # how much of the distance between "create no dependency" and "the best this circuit
+        # could do" has actually been closed. Measured from the honest null, not the floor: the
+        # 4% the floor hands out for free is not something the topology earned.
+        closed = (HONEST_NULL - m) / (HONEST_NULL - CEILING) * 100
         print(f"  {name:<16} {m:>10.4f} ± {sd:.4f} {(m - floor) / floor * 100:>+9.1f}% "
-              f"{closed:>25.0f}%")
+              f"{(m - HONEST_NULL) / HONEST_NULL * 100:>+8.1f}% {closed:>25.0f}%")
 
     cdg = np.array(res["cdg"])
 

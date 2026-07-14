@@ -966,6 +966,10 @@ sane values apparently lets the critic see a cleaner copula. The two terms help 
 
 **We now beat TVAE on TSTR** (0.7856 vs 0.7736) with 29 entangling angles against ~10⁶ parameters.
 
+> ⚠️ **The two TSTR numbers in this section are from a SINGLE seed and one of them is wrong.**
+> At three seeds the ordering against `no_entangle` reverses. See **§E-13**, which supersedes
+> everything below this line. The dependency numbers (0.0768, 0.0980) are unaffected and stand.
+
 #### The finding we would rather not have, and will report anyway
 
 **`no_entangle` scores TSTR 0.7710.** The CDG scores 0.7856. **The entire cross-feature dependency
@@ -979,6 +983,143 @@ structure at all.
 That has to be said in the abstract, not buried: the alignment effect is large and real **on the
 dependency structure**, and it is small **on this particular downstream task**. A paper that reports
 only the first number is selling something.
+
+---
+
+### E-12. WP-2 confirmed the topology hypothesis — and the floor we had been quoting was the wrong null
+
+`wp2.py` (5 shards) · `wp2_report.py` · `null_condmarg.py` · `RESULTS_wp2.md`
+Δ=4 · L=1 · v3 loss · 8,000 steps · batch 512 · 3 seeds × 10 graphs, full cohort n = 48,561
+
+#### The result
+
+```
+CDG − permuted          (3 graphs, n=9)  = −0.0134   95% CI [−0.0187, −0.0086]
+CDG − distance-matched  (3 graphs, n=9)  = −0.0154   95% CI [−0.0202, −0.0109]   <- decisive
+CDG − rewired                    (n=3)   = −0.0151   95% CI [−0.0197, −0.0114]
+CDG − ring-with-chords           (n=3)   = −0.0064   95% CI [−0.0120, −0.0014]
+CDG − no_entangle                (n=3)   = −0.0171   95% CI [−0.0218, −0.0142]
+```
+
+Every CI excludes zero. And a statement that needs no bootstrap at all: **the CDG's worst seed
+(0.0823) beats every one of the 27 control seeds (minimum 0.0825).** The two sets do not overlap.
+
+The decisive control is `distmatched`: it holds the *distribution of graph distances over the 120
+pairs* fixed and changes only **which** pairs sit where. Beating an isomorphic permutation alone
+could be graph combinatorics — an L=1 circuit reaches only pairs within distance 2, so any graph
+covering more pairs wins, whatever it covers. Distance matching removes exactly that degree of
+freedom. What survives is the clinical claim: not *how many* pairs the circuit reaches, but *which*.
+
+#### The floor was the wrong null, and it was our own fix that broke it
+
+`no_entangle` scored **0.0966** against a floor of **0.0985** — *below* it. Read literally, a circuit
+with zero entangling gates was creating dependency, which Proposition D-2 says is impossible.
+
+It is the floor that is wrong, and the cause is in the **estimator**. `eval_dep.partial_corr_c`
+residualizes on a fixed basis: `1, c, c², c_a·c_b`. Whatever part of `E[x_u | c]` lies outside that
+span survives residualization — and being a deterministic function of `c`, it is **shared across
+features**, which is precisely what a correlation estimator reports as cross-feature dependence.
+`zr` is measured with the same estimator, so `zr` carries the same bias. **A model that reproduces
+`E[x_u | c]` reproduces the bias, lands closer to `zr`, and scores below the floor while creating no
+conditional dependence at all.**
+
+That was not bad luck. The v3 marginal term makes `E[x_u | c]` correct **on purpose**. The floor —
+which permutes the features *and* `c`, destroying the x–c relation along with the cross-feature one —
+was the right null for v2, where nothing trained the marginals. §E-11 made it the wrong null, and we
+kept quoting it for a full WP-2 run.
+
+**The honest null** (`null_condmarg.py`): bin `c` by mortality × age-quantile × sex × ICU type and
+permute each feature independently *within* each bin. Conditional cross-feature dependence is then
+exactly zero **by construction** — no model, no training, no circuit — while `E[x_u | c]` is the true
+conditional marginal.
+
+| | score | vs floor |
+|---|---|---|
+| wp2 floor (x–c destroyed too) | 0.0985 | — |
+| honest null, 197 bins (age-quartile) | 0.0942 ± 0.0003 | −4.3 % |
+| honest null, 357 bins (age-octile) | 0.0940 ± 0.0004 | −4.6 % |
+
+Stable across bin resolution, so it is the estimator's conditioning bias and not the binning. **A
+zero-dependency model with correct conditional marginals collects ~4 % below the floor for free.**
+
+Three consequences:
+
+1. **`no_entangle` (0.0966) does not even reach the honest null (0.0942).** It sits *between* the two
+   nulls — where a model with zero dependency and *imperfect* marginals (W₁ = 0.131) belongs. Every
+   bit of its sub-floor score is accounted for without invoking any dependency. **The falsifier holds
+   more strongly than we thought, not less.**
+2. The CDG's headline shrinks from −19.2 % to **−15.5 %**. The smaller number is the correct one.
+3. **The contrasts are untouched.** The bias is a common offset — every variant carries the same 1-D
+   marginal term — and it cancels in `CDG − permuted` and `CDG − distance-matched`.
+
+And a detail worth the paper: against the honest null, **five of the nine controls score at or
+ABOVE it** (`rewired` +0.5 %, `distmatched_0` +2.2 %, `no_entangle` +2.6 %, `distmatched_1` +4.0 %,
+`permuted_2` +4.5 %). A misaligned topology does not merely fail to help — it manufactures dependency
+that is **wrong**, and ends up worse than creating none at all. Only the CDG is decisively below.
+
+#### The lesson
+
+A null is not a constant. It is a claim about what a model would score if the effect were absent —
+and it is stated **relative to an architecture**. We changed the architecture in §E-11 and did not
+re-derive the null, so for one full WP-2 run we were quoting a number that had stopped meaning what
+its name said. It happened to flatter us. It would have been caught by a reviewer, and the correct
+place to catch it was here.
+
+---
+
+### E-13. The pre-registered TSTR prediction was refuted, and the +0.015 was seed noise
+
+`wp3_qgan.py` (v3, 3 seeds, same 75/25 split as the baselines) · `RESULTS_wp3.md`
+
+§E-11 reported, from **one seed**, that the CDG beat `no_entangle` on TSTR by +0.015 AUROC, and
+called it "the finding we would rather not have." Three seeds say it is not a finding at all.
+
+| | dep. error | TSTR AUROC |
+|---|---|---|
+| CDG-QGAN Δ=4 (calibrated) | **0.0765** | 0.7803 |
+| **no_entangle** (calibrated) | 0.0975 | **0.7848** |
+
+**The ordering reverses. A circuit with zero entangling gates beats the CDG on TSTR.** The CDG is
+22 % better on the dependency metric and *loses* on the downstream task.
+
+This is the pre-registration in `wp3_qgan.py`, written before the run, being **refuted**:
+
+> *"On TSTR we expect to do better than [the dependency ratio] suggests, because the CDG deliberately
+> places the STRONG dependencies inside the light cone … if it does not, the honest conclusion is
+> that at L=1 the model has no performance argument at all and the paper rests on the structural
+> result."*
+
+We take the conclusion we wrote down in advance. **The cross-feature dependency structure — the
+subject of this paper — is worth nothing on in-ICU mortality prediction.** We do beat TVAE
+(0.7803 vs 0.7736), but so does `no_entangle` (0.7848): the win comes from the conditional marginals
+and the quantile calibration, not from the topology. Claiming a topology win on TSTR would be false.
+
+#### Δ=4 also bought nothing under training
+
+| | Corollary 1 bound | ceiling (no GAN) | **trained** |
+|---|---|---|---|
+| Δ=3 | 0.0329 | 0.0435 | **0.0762** |
+| Δ=4 | 0.0138 | 0.0300 | **0.0765** |
+
+The §E-9 redesign halved the bound and improved the ceiling by 31 %, and under GAN training the two
+graphs are within noise of each other. The trained model realises **less than half** of what its own
+circuit can express (0.0765 against a ceiling of 0.0300).
+
+**The binding constraint is the optimizer, not the light cone.** Widening the light cone cannot help
+until that changes. WP-2 reaches the same conclusion from the other direction, and it is the one
+thing left that could turn this into a performance result.
+
+#### What the paper is
+
+A **structural** result, not a performance one, and the abstract must say both:
+
+- **Holds.** Planting the clinical dependency graph in the RZZ topology produces measurably better
+  conditional dependency structure than every matched control — including a distance-matched one —
+  with 29 entangling angles, CI excluding zero, and complete seed separation.
+- **Does not hold.** That structure yields no downstream benefit on this task.
+
+Two single-seed numbers in §E-11 got promoted to a claim. The check that caught it was running three
+seeds — the cheapest experiment in this document, and the one we skipped.
 
 ### E-5. A bug caught along the way: `no_entangle` falls back to the full statevector
 

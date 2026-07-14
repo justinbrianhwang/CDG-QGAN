@@ -53,7 +53,7 @@ warnings.filterwarnings("ignore")
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).parent))
 
-from diag_fix2 import Cfg, train_fix2  # noqa: E402
+from train_v3 import CfgV3, train_v3  # noqa: E402
 from eval_dep import dep_error, fisher_z, partial_corr_c  # noqa: E402
 from features import CORE16  # noqa: E402
 from graphs import isomorphic_permuted  # noqa: E402
@@ -142,6 +142,14 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=8000)
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--seeds", type=int, default=3)
+    ap.add_argument("--lambda-marg", type=float, default=10.0)
+    ap.add_argument("--lr-g", type=float, default=1e-3)
+    # One variant is 3 trainings ~= 2.6 GPU-hours. Run the four variants as four processes and
+    # merge with --merge; the GPU is saturated either way, so this buys wall-clock, not throughput.
+    ap.add_argument("--only", type=str, default=None,
+                    help="run one variant only: d3 | d4 | permuted | no_entangle")
+    ap.add_argument("--merge", action="store_true",
+                    help="merge the per-variant JSONs into wp3_qgan.json and print the table")
     args = ap.parse_args()
 
     names = [f.name for f in CORE16]
@@ -171,6 +179,31 @@ def main() -> None:
         variants["  permuted (Δ=3)"] = isomorphic_permuted(G3, np.random.default_rng(20260711))
     variants["  no_entangle"] = nx.empty_graph(N_FEAT)
 
+    KEY = {"d3": "CDG-QGAN Δ=3", "d4": "CDG-QGAN Δ=4",
+           "permuted": "  permuted (Δ=3)", "no_entangle": "  no_entangle"}
+    if args.merge:
+        merged = {"tstr_ceiling": list(trtr)}
+        for part in sorted(RESULTS.glob("wp3_qgan_part_*.json")):
+            merged.update({k: v for k, v in json.loads(part.read_text()).items()
+                           if k != "tstr_ceiling"})
+        (RESULTS / "wp3_qgan.json").write_text(json.dumps(merged, indent=2, default=float))
+        print(f"  TSTR ceiling (train on REAL): AUROC {trtr[0]:.4f}  AUPRC {trtr[1]:.4f}\n")
+        print(f"  {'model':<22} {'|E|':>4} {'bound':>7} {'dep':>8} {'TSTR AUROC':>11} "
+              f"{'TSTR AUPRC':>11} {'W1':>8}")
+        for k, v in merged.items():
+            if k == "tstr_ceiling":
+                continue
+            print(f"  {k:<22} {v['edges']:>4} {v['bound']:>7.4f} {v['dep']:>8.4f} "
+                  f"{v['auroc']:>11.4f} {v['auprc']:>11.4f} {v['w1']:>8.4f}")
+        print(f"\n  saved: {RESULTS / 'wp3_qgan.json'}")
+        return
+
+    if args.only:
+        want = KEY[args.only]
+        variants = {k: v for k, v in variants.items() if k == want}
+        if not variants:
+            sys.exit(f"--only {args.only}: that graph file is not present")
+
     print("=" * 108)
     print("CDG-QGAN under the WP-3 protocol — same split, same metrics as the classical baselines")
     print("=" * 108)
@@ -194,9 +227,9 @@ def main() -> None:
         cal = {"de": [], "au": [], "apr": [], "w1": []}
         t0 = time.time()
         for s in range(args.seeds):
-            cfg = Cfg(steps=args.steps, batch=args.batch, seed=s,
-                      copula=True, batch_critic=True, lr_q=5e-3)
-            Gm = train_fix2(Xtr, Ctr, list(Gv.edges()), cfg)
+            cfg = CfgV3(steps=args.steps, batch=args.batch, seed=s, lr_q=5e-3,
+                        lr_g=args.lr_g, lambda_marg=args.lambda_marg)
+            Gm = train_v3(Xtr, Ctr, list(Gv.edges()), cfg)
             Xs, Cs = sample(Gm, Ctr, N_SYN, s)
             Xc = calibrate_marginals(Xs, Xtr)
             for d, A in ((raw, Xs), (cal, Xc)):
@@ -225,15 +258,23 @@ def main() -> None:
     print()
     print("  The copula critic is blind to the marginals BY DESIGN — that is what forced the")
     print("  gradient into the entangling angles (REVISIONS §E-7). The price, which we did not see")
-    print("  until TSTR was measured, is that nothing in the loss trains the heads to match the")
-    print("  marginals, and they don't. The calibration rows fix that with a monotone per-feature")
-    print("  map, which by construction leaves the copula — and therefore the entire scientific")
-    print("  claim — untouched.")
+    print("  until TSTR was measured, is that nothing in the loss trained the heads to match the")
+    print("  marginals, and they didn't (W1 = 0.676, TSTR BELOW the floor). The v3 loss fixes that")
+    print("  IN THE OBJECTIVE with a strictly 1-D conditional marginal term (§E-11), not with a")
+    print("  post-hoc map — post-hoc calibration fixed W1 and made TSTR WORSE (0.641 -> 0.573).")
+    print()
+    print("  The calibration rows are kept only as an INVARIANT CHECK: a monotone per-feature map")
+    print("  cannot change the copula, so the dep. column must be identical between the two rows.")
+    print("  If it moves, something in the pipeline is not rank-invariant and the metric is lying.")
     print("=" * 108)
 
     RESULTS.mkdir(exist_ok=True)
-    (RESULTS / "wp3_qgan.json").write_text(json.dumps(out, indent=2, default=float))
-    print(f"\n  saved: {RESULTS / 'wp3_qgan.json'}")
+    # With --only, each variant is its own process and MUST write its own file. Three processes
+    # writing wp3_qgan.json would clobber one another and the last one to finish would silently
+    # win, leaving a one-row table that looks complete. `--merge` assembles the parts.
+    dst = RESULTS / (f"wp3_qgan_part_{args.only}.json" if args.only else "wp3_qgan.json")
+    dst.write_text(json.dumps(out, indent=2, default=float))
+    print(f"\n  saved: {dst}")
 
 
 if __name__ == "__main__":

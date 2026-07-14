@@ -9,6 +9,54 @@ planted directly into the circuit's RZZ layout, it recovers the dependency struc
 than an **isomorphic permutation** of that same graph using identical resources. In other
 words, "Clinical" is not a mere modifier — it demonstrably contributes bits.
 
+## Where this stands
+
+**This is a structural result, not a performance result.** Both halves are stated here because a
+paper that reports only the first is selling something.
+
+**The topology hypothesis holds.** On real MIMIC-IV v3.1 (n = 48,561), against nine matched control
+topologies at three seeds each — `RESULTS_wp2.md`:
+
+![WP-2: the CDG against nine matched control topologies](figures/fig_wp2.png)
+
+*Open circles are individual seeds. The reference line is the* honest null *(0.0942) — a model with
+exactly zero conditional cross-feature dependence but correct conditional marginals — and not the
+permutation floor (0.0985), which hands any such model ~4 % for free through the evaluator's
+conditioning basis (§E-12).*
+
+```
+CDG − permuted          (isomorphic)      = −0.0134   95% CI [−0.0187, −0.0086]
+CDG − distance-matched                    = −0.0154   95% CI [−0.0202, −0.0109]   <- decisive
+CDG − rewired           (degree-preserving) = −0.0151 95% CI [−0.0197, −0.0114]
+CDG − ring-with-chords                    = −0.0064   95% CI [−0.0120, −0.0014]
+CDG − no_entangle                         = −0.0171   95% CI [−0.0218, −0.0142]
+```
+
+Every CI excludes zero, with **29 entangling angles**. And without any bootstrap: the CDG's *worst*
+seed (0.0823) beats *every one* of the 27 control seeds (minimum 0.0825) — the two sets do not
+overlap. The **distance-matched** control is the one that matters: it fixes the distribution of graph
+distances over all 120 pairs and varies only **which** pairs sit where. What survives is not "the
+circuit reaches more pairs" but "it reaches the *right* pairs."
+
+**The performance hypothesis does not.** On the same split, against classical baselines —
+`RESULTS_wp3.md`:
+
+| | dep. error | TSTR AUROC |
+|---|---|---|
+| gaussian copula (the **oracle** for this metric) | **0.0064** | **0.8073** |
+| CDG-QGAN Δ=4 | 0.0765 | 0.7803 |
+| **no_entangle** | 0.0975 | **0.7848** |
+| TVAE | 0.0708 | 0.7736 |
+| CTGAN | 0.0935 | 0.6999 |
+
+**A circuit with zero entangling gates beats the CDG on TSTR.** The cross-feature dependency
+structure — the subject of this paper — is worth **nothing** on in-ICU mortality prediction. We beat
+TVAE, but so does `no_entangle`: the win comes from the conditional marginals, not the topology.
+
+The trained model reaches 0.0765 against a ceiling of **0.0300** that the same circuit reaches with
+the GAN removed. **The binding constraint is the optimizer, not the light cone** — which is the one
+open lever left (WP-6).
+
 ## Skeleton of the design
 
 - **1 feature = 1 qubit.** Each feature gets its own local latent variable `z_u`, encoded as

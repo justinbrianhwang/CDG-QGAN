@@ -344,6 +344,95 @@ def fig_ceiling_real() -> None:
     save(fig, "fig_ceiling_real")
 
 
+# ---------------------------------------------------------------------------
+# Figure G — WP-2, the confirmatory result.   Source: RESULTS_wp2.md
+#            (produced by wp2.py -> results/wp2_L1_combined.json, which is a run artifact and
+#             is not in the repo — so the per-seed values are transcribed here, like every other
+#             figure in this file, and a clone can redraw it.)
+#
+# The reference line is the HONEST NULL (null_condmarg.py, 0.0942), not the wp2 floor (0.0985).
+# The floor destroys the x-c relation as well as the cross-feature one, so a v3 model — whose
+# 1-D marginal term makes E[x_u|c] correct on purpose — scores ~4% below it for free, through the
+# evaluator's fixed conditioning basis and not through any dependency. See REVISIONS §E-12.
+# Drawing the floor here would hand every bar 4% it did not earn.
+# ---------------------------------------------------------------------------
+
+HONEST_NULL = 0.0942     # null_condmarg.py — zero dependency, correct conditional marginals
+CEILING_D4 = 0.0300      # RESULTS_design.md — Δ=4, GAN removed
+BOUND_D4 = 0.0140        # Corollary 1 — unreachable by any L=1 Δ=4 circuit
+
+# Δ=4 · L=1 · v3 loss · 8,000 steps · batch 512 · 3 seeds · full cohort n=48,561
+WP2 = {
+    "cdg":           [0.081672, 0.082334, 0.074699],
+    "ring":          [0.082804, 0.089933, 0.085029],
+    "permuted_0":    [0.091218, 0.090119, 0.082457],
+    "distmatched_2": [0.095928, 0.089904, 0.086181],
+    "permuted_1":    [0.094258, 0.091738, 0.091981],
+    "rewired":       [0.096152, 0.095197, 0.092734],
+    "distmatched_0": [0.096590, 0.094710, 0.097645],
+    "no_entangle":   [0.096713, 0.097110, 0.096040],
+    "distmatched_1": [0.098008, 0.101347, 0.094447],
+    "permuted_2":    [0.098927, 0.101434, 0.094875],
+}
+
+LABEL = {"cdg": "CDG  (aligned)", "ring": "ring-with-chords", "rewired": "rewired (degree-pres.)",
+         "no_entangle": "no_entangle"}
+
+
+def fig_wp2() -> None:
+    res = WP2
+    order = list(WP2)
+    names = [LABEL.get(k, k.replace("_", " ")) for k in order]
+    v = np.array([np.mean(res[k]) for k in order])
+    sd = np.array([np.std(res[k]) for k in order])
+    colors = [GREEN if k == "cdg" else (GRAY if k == "no_entangle" else BLUE) for k in order]
+
+    fig, ax = plt.subplots(figsize=(10.6, 5.2))
+    y = np.arange(len(order))[::-1]
+
+    ax.axvspan(BOUND_D4, CEILING_D4, color="#EFEFEF", zorder=0)
+    ax.axvline(HONEST_NULL, color=RED, lw=1.4, ls="--", zorder=2)
+    ax.axvline(CEILING_D4, color="#666666", lw=1.2, ls=":", zorder=2)
+    ax.axvline(BOUND_D4, color="#666666", lw=1.2, ls="-", zorder=2)
+
+    ax.barh(y, v, xerr=sd, color=colors, height=0.66, zorder=3,
+            error_kw=dict(ecolor="#555555", lw=1.2, capsize=3))
+
+    # every seed, so the reader can see the separation without having to trust a bootstrap
+    for yy, k in zip(y, order):
+        pts = np.array(res[k])
+        ax.plot(pts, np.full_like(pts, yy), "o", ms=3.4, mfc="white",
+                mec="#333333", mew=0.9, zorder=4)
+
+    # values in a column of their own, clear of the bars and the error bars
+    for yy, vv, k in zip(y, v, order):
+        ax.text(0.108, yy, f"{vv:.4f}", va="center", fontsize=9.5,
+                fontweight="bold" if k == "cdg" else "normal",
+                color=GREEN if k == "cdg" else "#333333")
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(names)
+    ax.set_xlabel("conditional dependency error over all 120 pairs   (lower = better)")
+    ax.set_xticks([0.0, 0.02, 0.04, 0.06, 0.08, 0.10])
+    ax.set_xlim(0, 0.121)
+    ax.set_ylim(y.min() - 1.15, y.max() + 1.45)
+    ax.set_title("WP-2 · real MIMIC-IV (n=48,561) · same 29-edge budget, 3 seeds — only the "
+                 "placement differs", fontsize=11.5, pad=30)
+
+    ax.text(BOUND_D4 - 0.001, y.max() + 1.4, "Corollary 1\nbound 0.0140", color="#555555",
+            fontsize=8.5, va="top", ha="right", linespacing=1.4)
+    ax.text(CEILING_D4 + 0.001, y.max() + 1.4, "ceiling 0.0300\n(GAN removed)", color="#555555",
+            fontsize=8.5, va="top", ha="left", linespacing=1.4)
+    ax.text(HONEST_NULL - 0.0015, y.max() + 1.4, "honest null 0.0942\n(zero dependency)",
+            color=RED, fontsize=8.5, va="top", ha="right", linespacing=1.4)
+
+    ax.text(0.0, y.min() - 1.05,
+            "CDG's worst seed 0.0823  <  every one of the 27 control seeds (min 0.0825).  "
+            "The two sets do not overlap.",
+            fontsize=9, color=GREEN, va="bottom")
+    save(fig, "fig_wp2")
+
+
 if __name__ == "__main__":
     print("Writing figures to", OUT)
     fig_lightcone_cliff()
@@ -352,3 +441,4 @@ if __name__ == "__main__":
     fig_confirm()
     fig_training_real()
     fig_ceiling_real()
+    fig_wp2()
